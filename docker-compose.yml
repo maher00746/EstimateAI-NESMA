@@ -1,0 +1,42 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+      args:
+        - PORT=${BACKEND_PORT:-4000}
+    environment:
+      PORT: ${BACKEND_PORT:-4000}
+      HOST: 0.0.0.0
+      MONGO_URI: ${MONGO_URI}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      JWT_SECRET: ${JWT_SECRET:-change-me}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
+      AIRWEAVE_BASE_URL: ${AIRWEAVE_BASE_URL:-https://api.airweave.ai}
+      AIRWEAVE_API_KEY: ${AIRWEAVE_API_KEY:-}
+      AIRWEAVE_COLLECTION_ID: ${AIRWEAVE_COLLECTION_ID:-}
+      AIRWEAVE_ORGANIZATION_ID: ${AIRWEAVE_ORGANIZATION_ID:-}
+      UPLOAD_DIR: /data/uploads/raw
+      STATIC_DIR: /data/uploads/raw
+    volumes:
+      - ./uploads:/data/uploads
+    ports:
+      - "${BACKEND_PORT:-4000}:4000"
+    networks:
+      - app-network
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      args:
+        - VITE_API_URL=${VITE_API_URL:-http://backend:4000}
+    ports:
+      - "${FRONTEND_PORT:-5173}:80"
+    depends_on:
+      - backend
+    networks:
+      - app-network
+
+networks:
+  app-network:

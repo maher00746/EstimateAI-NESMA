@@ -1,0 +1,16 @@
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+uploads/
+.env
+.env.*
+npm-debug.log*
+*.log
+.DS_Store
+/node_modules
+/dist
+/uploads
+.env
+/frontend/node_modules
+
