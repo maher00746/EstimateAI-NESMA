@@ -175,3 +175,14 @@ export interface ElectricalCalcResponse {
   totalManhours: number;
 }
 
+export interface CadExtractionBox {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}export interface CadExtractionItem {
+  item_code: string;
+  description: string;
+  notes: string;
+  box: CadExtractionBox;
+}

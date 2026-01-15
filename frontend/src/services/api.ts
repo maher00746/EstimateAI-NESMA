@@ -13,6 +13,7 @@ import type {
   ElectricalTotals,
   ElectricalCalcRequest,
   ElectricalCalcResponse,
+  CadExtractionItem,
 } from "../types";
 
 const API_BASE = "";
@@ -236,6 +237,21 @@ export async function parseLandingAi(files: File[]): Promise<LandingAiParseRespo
   const data = new FormData();
   files.forEach((file) => data.append("buildFiles", file));
   return safeFetch(`${API_BASE}/api/estimates/landingai/parse`, {
+    method: "POST",
+    body: data,
+  });
+}
+
+export interface CadExtractionResponse {
+  fileName: string;
+  items: CadExtractionItem[];
+  rawText?: string;
+}
+
+export async function extractCadItems(file: File): Promise<CadExtractionResponse> {
+  const data = new FormData();
+  data.append("cadFile", file);
+  return safeFetch(`${API_BASE}/api/estimates/cad-extraction`, {
     method: "POST",
     body: data,
   });

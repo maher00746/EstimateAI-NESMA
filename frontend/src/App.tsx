@@ -27,6 +27,7 @@ import {
 } from "./services/api";
 import { useAuth } from "./contexts/AuthContext";
 import LandingAiReview from "./LandingAiReview";
+import CadExtraction from "./pages/CadExtraction";
 import { v4 as uuidv4 } from "uuid";
 
 const COMPANY_LOGO_URL = "/company.png";
@@ -51,7 +52,7 @@ const STEP_ORDER: Record<EstimateStep, number> = {
   estimate: 5,
 };
 
-type AppPage = "new-estimate" | "drafts" | "drawing-prompt" | "landingai-review";
+type AppPage = "new-estimate" | "drafts" | "drawing-prompt" | "landingai-review" | "cad-extraction";
 type PricingAccordionId = "items" | "electrical" | "installation" | "venue";
 
 const PRICING_SECTIONS: Array<{ id: PricingAccordionId; label: string }> = [
@@ -287,6 +288,7 @@ function App() {
     location: "riyadh",
   });
   const isPrepareStep = activePage === "new-estimate" && activeEstimateStep === "finalize";
+  const isCadExtractionPage = activePage === "cad-extraction";
 
   useEffect(() => {
     const url = landingAiReviewData?.pdfUrl;
@@ -908,6 +910,8 @@ function App() {
       ? "My Drafts"
       : activePage === "drawing-prompt"
         ? "Drawing Extraction Prompt"
+        : activePage === "cad-extraction"
+          ? "CAD Extraction"
         : activePage === "new-estimate" && activeEstimateStep === "review"
           ? "Review Extracted Items"
           : activePage === "new-estimate" && activeEstimateStep === "compare"
@@ -2370,6 +2374,17 @@ function App() {
           </button>
           <button
             type="button"
+            className={`nav-link ${activePage === "cad-extraction" ? "is-active" : ""}`}
+            onClick={() => setActivePage("cad-extraction")}
+          >
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <path d="M4 6h8M4 10h12M4 14h6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+              <rect x="12" y="3" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.5" />
+            </svg>
+            <span>CAD Extraction</span>
+          </button>
+          <button
+            type="button"
             className={`nav-link ${activePage === "drafts" ? "is-active" : ""}`}
             onClick={() => setActivePage("drafts")}
           >
@@ -2414,7 +2429,7 @@ function App() {
               height: "100vh",
               overflow: "hidden",
             }
-            : isPrepareStep
+            : isPrepareStep || isCadExtractionPage
               ? {
                 maxWidth: "none",
                 height: "100vh",
@@ -2609,7 +2624,11 @@ function App() {
               </div>
             )}
 
-            <div style={isPrepareStep ? { flex: 1, minHeight: 0, overflow: "hidden" } : undefined}>
+            <div style={isPrepareStep || isCadExtractionPage ? { flex: 1, minHeight: 0, overflow: "hidden" } : undefined}>
+
+              {activePage === "cad-extraction" && (
+                <CadExtraction />
+              )}
 
               {activePage === "drawing-prompt" && (
                 <section id="drawing-prompt" className="panel">

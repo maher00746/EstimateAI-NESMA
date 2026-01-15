@@ -113,6 +113,10 @@ export type LandingAiReviewProps = {
   hoveredChunkId?: string;
   onSelectedChunkIdChange?: (id: string) => void;
   onHoveredChunkIdChange?: (id: string) => void;
+  /** Enable overlay when selection changes externally */
+  enableOverlayOnSelectionChange?: boolean;
+  /** Show all boxes instead of only selected */
+  showAllOverlays?: boolean;
 };
 
 function PdfPageWithOverlay(props: {
@@ -122,11 +126,12 @@ function PdfPageWithOverlay(props: {
   selectedChunkId: string;
   hoveredChunkId: string;
   overlayEnabled?: boolean;
+  showAllOverlays?: boolean;
   labelById: Record<string, string>;
   onSelectChunk: (chunk: LandingAiChunk) => void;
   pageContainerRef?: (el: HTMLDivElement | null) => void;
 }) {
-  const { pageIndex, width, overlayChunks, selectedChunkId, hoveredChunkId, overlayEnabled = false, labelById, onSelectChunk, pageContainerRef } = props;
+  const { pageIndex, width, overlayChunks, selectedChunkId, hoveredChunkId, overlayEnabled = false, showAllOverlays = false, labelById, onSelectChunk, pageContainerRef } = props;
   const pageWrapperRef = useRef<HTMLDivElement>(null);
   const [canvasSize, setCanvasSize] = useState<{ width: number; height: number }>({ width: 1, height: 1 });
 
@@ -202,13 +207,12 @@ function PdfPageWithOverlay(props: {
           const isSelected = c.id === selectedChunkId;
           const isHovered = c.id === hoveredChunkId;
           const isActive = isSelected || isHovered;
-          // Only render the selected box when enabled (no "always-on" overlays).
-          if (!isSelected) return null;
+          // Only render the selected box unless "show all" is enabled.
+          if (!showAllOverlays && !isSelected) return null;
           const x = box.left * overlayWidth;
           const y = box.top * overlayHeight;
           const w = (box.right - box.left) * overlayWidth;
           const h = (box.bottom - box.top) * overlayHeight;
-          const label = labelById[c.id] || (c.type ? String(c.type) : c.id.slice(0, 8));
           return (
             <div
               key={c.id}
@@ -226,26 +230,7 @@ function PdfPageWithOverlay(props: {
                 pointerEvents: "none",
                 borderRadius: 6,
               }}
-            >
-              {(isActive || isHovered) && (
-                <div
-                  style={{
-                    position: "absolute",
-                    top: -14,
-                    left: -2,
-                    background: "#ff3bd4",
-                    color: "#0b1020",
-                    fontWeight: 700,
-                    fontSize: 12,
-                    padding: "2px 8px",
-                    borderRadius: 6,
-                    letterSpacing: "0.2px",
-                  }}
-                >
-                  {label}
-                </div>
-              )}
-            </div>
+            />
           );
         })}
       </div>
@@ -408,7 +393,7 @@ export default function LandingAiReview(props: LandingAiReviewProps) {
 
   useEffect(() => {
     const el = selectedChunk ? pageRefs.current[getChunkPageIndex(selectedChunk)] : null;
-    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
   }, [selectedChunk]);
 
   useEffect(() => {
@@ -418,6 +403,18 @@ export default function LandingAiReview(props: LandingAiReviewProps) {
     const overlayEl = root.querySelector(`[data-overlay-id="${cssEscape(selectedChunkId)}"]`) as HTMLElement | null;
     overlayEl?.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
   }, [selectedChunkId]);
+
+  useEffect(() => {
+    if (!props.enableOverlayOnSelectionChange) return;
+    if (!selectedChunkId) return;
+    setPdfOverlayEnabled(true);
+  }, [props.enableOverlayOnSelectionChange, selectedChunkId]);
+
+  useEffect(() => {
+    if (props.showAllOverlays) {
+      setPdfOverlayEnabled(true);
+    }
+  }, [props.showAllOverlays]);
 
   useEffect(() => {
     const root = mdPaneRef.current;
@@ -485,11 +482,12 @@ export default function LandingAiReview(props: LandingAiReviewProps) {
       const step = 1.12;
       const oldZoom = pdfZoomRef.current;
       const next = direction > 0 ? oldZoom * step : oldZoom / step;
-      const newZoom = clamp(next, 0.5, 3.5);
+      const newZoom = clamp(next, 0.5, 5);
       if (Math.abs(newZoom - oldZoom) < 0.0001) return;
 
-      // Requirement: if user zooms in/out, hide any PDF selection box.
-      setPdfOverlayEnabled(false);
+      if (props.showAllOverlays || selectedChunkId) {
+        setPdfOverlayEnabled(true);
+      }
 
       const rect = el.getBoundingClientRect();
       const style = window.getComputedStyle(el);
@@ -713,6 +711,7 @@ export default function LandingAiReview(props: LandingAiReviewProps) {
                     selectedChunkId={selectedChunkId}
                     hoveredChunkId={hoveredChunkId}
                     overlayEnabled={pdfOverlayEnabled}
+                    showAllOverlays={props.showAllOverlays}
                     labelById={labelById}
                     onSelectChunk={handleSelectChunk}
                     pageContainerRef={(el) => {

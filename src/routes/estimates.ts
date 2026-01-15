@@ -26,6 +26,7 @@ import { loadAtgTotals } from "../services/pricing/atgSheet";
 import { loadElectricalTotals, calculateProjectCost } from "../services/pricing/electricalSheet";
 import { mapItemsToPriceList } from "../services/openai/priceMapper";
 import { generateDrawingMarkdownWithGemini } from "../services/gemini/drawingMarkdown";
+import { extractCadBoqItemsWithGemini } from "../services/gemini/cadExtraction";
 import { parseWithLandingAiToMarkdown } from "../services/landingai/parseToMarkdown";
 import { ExtractJobModel } from "../modules/storage/extractJobModel";
 import { kickOffExtractJob } from "../services/extraction/extractJobProcessor";
@@ -58,6 +59,7 @@ const matchUpload = upload.fields([
   { name: "buildFiles", maxCount: 10 },
   { name: "buildFile", maxCount: 1 },
 ]);
+const cadUpload = upload.single("cadFile");
 
 const router = Router();
 
@@ -94,6 +96,27 @@ router.post("/landingai/parse", matchUpload, async (req, res, next) => {
     );
 
     res.status(200).json({ files: parsedFiles });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/cad-extraction", cadUpload, async (req, res, next) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: "cadFile is required" });
+    }
+
+    const result = await extractCadBoqItemsWithGemini({
+      filePath: req.file.path,
+      fileName: req.file.originalname,
+    });
+
+    res.status(200).json({
+      fileName: req.file.originalname,
+      items: result.items,
+      rawText: result.rawText,
+    });
   } catch (error) {
     next(error);
   }
