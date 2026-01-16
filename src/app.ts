@@ -3,7 +3,7 @@ import path from "path";
 import cors from "cors";
 import { config } from "./config";
 import estimatesRouter from "./routes/estimates";
-import draftsRouter from "./routes/drafts";
+import projectsRouter from "./routes/projects";
 import promptsRouter from "./routes/prompts";
 import authRouter from "./routes/auth";
 import { authenticate } from "./middleware/auth";
@@ -20,7 +20,7 @@ app.use("/files", express.static(path.resolve(config.staticDir)));
 
 // Protected routes (authentication required)
 app.use("/api/estimates", authenticate, estimatesRouter);
-app.use("/api/drafts", authenticate, draftsRouter);
+app.use("/api/projects", authenticate, projectsRouter);
 app.use("/api/prompts", authenticate, promptsRouter);
 
 app.use((req, res) => {

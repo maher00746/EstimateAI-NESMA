@@ -180,9 +180,62 @@ export interface CadExtractionBox {
   top: number;
   right: number;
   bottom: number;
-}export interface CadExtractionItem {
+}
+
+export interface CadExtractionItem {
   item_code: string;
   description: string;
   notes: string;
   box: CadExtractionBox;
+}
+
+export type ProjectStatus = "in_progress" | "analyzing" | "finalized";
+
+export interface ProjectSummary {
+  id: string;
+  name: string;
+  status: ProjectStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type ProjectFileStatus = "pending" | "processing" | "ready" | "failed";
+export type ProjectFileType = "drawing" | "boq";
+
+export interface ProjectFile {
+  id: string;
+  fileNo: number;
+  fileName: string;
+  fileUrl: string;
+  storedName: string;
+  fileType: ProjectFileType;
+  status: ProjectFileStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProjectItem {
+  id: string;
+  fileId: string;
+  fileNo?: number | null;
+  fileName?: string | null;
+  source: "cad" | "manual";
+  item_code: string;
+  description: string;
+  notes: string;
+  box?: CadExtractionBox | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type ProjectLogLevel = "info" | "warning" | "error";
+
+export interface ProjectLog {
+  id: string;
+  level: ProjectLogLevel;
+  message: string;
+  fileId?: string | null;
+  fileNo?: number | null;
+  fileName?: string | null;
+  createdAt: string;
 }

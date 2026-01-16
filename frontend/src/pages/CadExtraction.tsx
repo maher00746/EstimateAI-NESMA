@@ -5,6 +5,17 @@ import type { CadExtractionBox, CadExtractionItem } from "../types";
 
 type CadItemWithId = CadExtractionItem & { id: string };
 
+type CadExtractionMode = "upload" | "review";
+
+type CadExtractionProps = {
+  mode?: CadExtractionMode;
+  fileUrl?: string;
+  fileName?: string;
+  items?: CadItemWithId[];
+  onSave?: (items: CadItemWithId[]) => Promise<void>;
+  onBack?: () => void;
+};
+
 const clamp01 = (value: number): number => Math.min(1, Math.max(0, value));
 
 const normalizeBox = (box: CadExtractionBox | null | undefined): CadExtractionBox | null => {
@@ -20,7 +31,14 @@ const normalizeBox = (box: CadExtractionBox | null | undefined): CadExtractionBo
   return { left, top, right, bottom };
 };
 
-export default function CadExtraction() {
+export default function CadExtraction({
+  mode = "upload",
+  fileUrl: externalFileUrl,
+  fileName: externalFileName,
+  items: externalItems,
+  onSave,
+  onBack,
+}: CadExtractionProps) {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [fileUrl, setFileUrl] = useState<string>("");
   const [items, setItems] = useState<CadItemWithId[]>([]);
@@ -28,13 +46,22 @@ export default function CadExtraction() {
   const [hasExtracted, setHasExtracted] = useState(false);
   const [selectAll, setSelectAll] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const tableRowRefs = useRef<Record<string, HTMLTableRowElement | null>>({});
   const tableScrollRef = useRef<HTMLDivElement | null>(null);
   const selectionSourceRef = useRef<"pdf" | "table" | null>(null);
 
+  const isReviewMode = mode === "review";
+
   useEffect(() => {
+    if (isReviewMode) {
+      setFileUrl(externalFileUrl || "");
+      setItems(externalItems || []);
+      setHasExtracted(true);
+      return;
+    }
     if (!selectedFile) {
       setFileUrl("");
       return;
@@ -44,7 +71,7 @@ export default function CadExtraction() {
     return () => {
       if (url.startsWith("blob:")) URL.revokeObjectURL(url);
     };
-  }, [selectedFile]);
+  }, [selectedFile, externalFileUrl, externalItems, isReviewMode]);
 
   useEffect(() => {
     if (!selectedItemId) return;
@@ -107,11 +134,52 @@ export default function CadExtraction() {
     }
   }, [selectedFile]);
 
+  const handleItemFieldChange = useCallback(
+    (id: string, field: "item_code" | "description" | "notes", value: string) => {
+      setItems((prev) =>
+        prev.map((item) => (item.id === id ? { ...item, [field]: value } : item))
+      );
+    },
+    []
+  );
+
+  const handleDeleteItem = useCallback((id: string) => {
+    setItems((prev) => prev.filter((item) => item.id !== id));
+  }, []);
+
+  const handleAddItem = useCallback(() => {
+    const id = `new-${Date.now()}`;
+    setItems((prev) => [
+      ...prev,
+      {
+        id,
+        item_code: "",
+        description: "",
+        notes: "",
+        box: { left: 0, top: 0, right: 0, bottom: 0 },
+      },
+    ]);
+    setSelectedItemId(id);
+  }, []);
+
+  const handleSave = useCallback(async () => {
+    if (!onSave) return;
+    setSaving(true);
+    setError("");
+    try {
+      await onSave(items);
+    } catch (err) {
+      setError((err as Error).message || "Failed to save items.");
+    } finally {
+      setSaving(false);
+    }
+  }, [items, onSave]);
+
   const headerLeft = (
     <div style={{ display: "flex", flexDirection: "column" }}>
       <h2 className="review-title" style={{ marginBottom: 4 }}>CAD Extraction</h2>
       <div style={{ color: "rgba(227,233,255,0.75)", fontSize: "0.9rem" }}>
-        {selectedFile?.name || "CAD Drawing"} • {items.length} item(s)
+        {externalFileName || selectedFile?.name || "CAD Drawing"} • {items.length} item(s)
       </div>
     </div>
   );
@@ -133,7 +201,14 @@ export default function CadExtraction() {
             Select All (show all boxes)
           </label>
         </div>
-        <span className="status">{loading ? "Processing…" : "Idle"}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+          {isReviewMode && (
+            <button type="button" className="btn-secondary" onClick={handleAddItem}>
+              Add Item
+            </button>
+          )}
+          <span className="status">{loading ? "Processing…" : saving ? "Saving…" : "Idle"}</span>
+        </div>
       </div>
       <div
         className="table-wrapper"
@@ -146,12 +221,13 @@ export default function CadExtraction() {
               <th>Item</th>
               <th>Description</th>
               <th>Notes</th>
+              {isReviewMode && <th>Actions</th>}
             </tr>
           </thead>
           <tbody>
             {items.length === 0 ? (
               <tr className="matches-table__row">
-                <td colSpan={3} style={{ textAlign: "center", color: "rgba(227,233,255,0.7)" }}>
+                <td colSpan={isReviewMode ? 4 : 3} style={{ textAlign: "center", color: "rgba(227,233,255,0.7)" }}>
                   No items extracted yet.
                 </td>
               </tr>
@@ -166,16 +242,56 @@ export default function CadExtraction() {
                 };
                 return (
                   <tr
-                    key={`cad-item-${idx}`}
+                    key={item.id}
                     className={`matches-table__row ${isLinked ? "is-linked" : ""}`}
                     onClick={handleRowClick}
                     ref={(el) => {
                       tableRowRefs.current[item.id] = el;
                     }}
                   >
-                    <td>{item.item_code || `Item ${idx + 1}`}</td>
-                    <td>{item.description || "—"}</td>
-                    <td>{item.notes || "—"}</td>
+                    <td>
+                      {isReviewMode ? (
+                        <input
+                          type="text"
+                          value={item.item_code}
+                          onChange={(event) => handleItemFieldChange(item.id, "item_code", event.target.value)}
+                          placeholder={`Item ${idx + 1}`}
+                        />
+                      ) : (
+                        item.item_code || `Item ${idx + 1}`
+                      )}
+                    </td>
+                    <td>
+                      {isReviewMode ? (
+                        <input
+                          type="text"
+                          value={item.description}
+                          onChange={(event) => handleItemFieldChange(item.id, "description", event.target.value)}
+                          placeholder="Description"
+                        />
+                      ) : (
+                        item.description || "—"
+                      )}
+                    </td>
+                    <td>
+                      {isReviewMode ? (
+                        <input
+                          type="text"
+                          value={item.notes}
+                          onChange={(event) => handleItemFieldChange(item.id, "notes", event.target.value)}
+                          placeholder="Notes"
+                        />
+                      ) : (
+                        item.notes || "—"
+                      )}
+                    </td>
+                    {isReviewMode && (
+                      <td>
+                        <button type="button" className="btn-secondary" onClick={() => handleDeleteItem(item.id)}>
+                          Delete
+                        </button>
+                      </td>
+                    )}
                   </tr>
                 );
               })
@@ -187,7 +303,7 @@ export default function CadExtraction() {
     </div>
   );
 
-  if (!selectedFile || !hasExtracted) {
+  if (!isReviewMode && (!selectedFile || !hasExtracted)) {
     return (
       <section className="panel">
         <div className="panel__header">
@@ -232,7 +348,7 @@ export default function CadExtraction() {
           </div>
           {error && <p className="feedback">{error}</p>}
         </div>
-        {loading && (
+          {loading && (
           <div className="processing-overlay">
             <div className="processing-indicator">
               <div className="processing-indicator__spinner">
@@ -269,30 +385,44 @@ export default function CadExtraction() {
       <LandingAiReview
         pdfUrl={fileUrl}
         landingAiRaw={landingAiRaw}
-        fileName={selectedFile?.name}
+        fileName={externalFileName || selectedFile?.name}
         headerLeft={headerLeft}
         headerCompact
         enableOverlayOnSelectionChange
         showAllOverlays={selectAll}
         headerActions={
           <div style={{ display: "flex", gap: "0.5rem" }}>
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={() => {
-                fileInputRef.current?.click();
-              }}
-            >
-              Upload another
-            </button>
-            <button
-              type="button"
-              className="btn-match"
-              onClick={() => void handleExtract()}
-              disabled={loading || !selectedFile}
-            >
-              Re-run extraction
-            </button>
+            {onBack && (
+              <button type="button" className="btn-secondary" onClick={onBack}>
+                Back
+              </button>
+            )}
+            {!isReviewMode && (
+              <>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => {
+                    fileInputRef.current?.click();
+                  }}
+                >
+                  Upload another
+                </button>
+                <button
+                  type="button"
+                  className="btn-match"
+                  onClick={() => void handleExtract()}
+                  disabled={loading || !selectedFile}
+                >
+                  Re-run extraction
+                </button>
+              </>
+            )}
+            {isReviewMode && onSave && (
+              <button type="button" className="btn-match" onClick={() => void handleSave()} disabled={saving}>
+                {saving ? "Saving…" : "Save"}
+              </button>
+            )}
           </div>
         }
         rightPane={rightPane}

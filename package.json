@@ -4,8 +4,10 @@
   "main": "dist/server.js",
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only --ignore-watch node_modules --ignore-watch dist --ignore-watch uploads --ignore-watch frontend src/server.ts",
+    "dev:worker": "ts-node-dev --respawn --transpile-only --ignore-watch node_modules --ignore-watch dist --ignore-watch uploads --ignore-watch frontend src/worker.ts",
     "build": "tsc",
-    "start": "node dist/server.js"
+    "start": "node dist/server.js",
+    "start:worker": "node dist/worker.js"
   },
   "keywords": [],
   "author": "",

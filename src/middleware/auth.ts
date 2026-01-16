@@ -14,13 +14,9 @@ export const authenticate = async (
 ): Promise<void> => {
   try {
     const authHeader = req.headers.authorization;
-
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      res.status(401).json({ message: "Authentication required. Please provide a valid token." });
-      return;
-    }
-
-    const token = authHeader.substring(7); // Remove "Bearer " prefix
+    const headerToken = authHeader?.startsWith("Bearer ") ? authHeader.substring(7) : "";
+    const queryToken = typeof req.query?.token === "string" ? req.query.token : "";
+    const token = headerToken || queryToken;
 
     if (!token) {
       res.status(401).json({ message: "Authentication required. Please provide a valid token." });

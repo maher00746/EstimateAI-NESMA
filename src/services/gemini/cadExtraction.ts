@@ -54,6 +54,14 @@ const CAD_EXTRACTION_PROMPT = `You are a Senior Estimate Engineer and Quantity S
 2.  **Detail Capture:** Do not ignore small text, vertical text, or text inside hatch patterns. Capture everything.
 3.  **Context Awareness:** Associate labels with their leaders/arrows to understand what they point to.
 
+**COORDINATE SYSTEM INSTRUCTIONS (CRITICAL):**
+1.  **Normalization:** Return coordinates as Normalized values between 0.0 and 1.0 relative to the page size.
+2.  **Origin:** (0.0, 0.0) is the Top-Left corner.
+3.  **Axes:** 
+    *   'left' (x_min) and 'right' (x_max) correspond to the horizontal axis.
+    *   'top' (y_min) and 'bottom' (y_max) correspond to the vertical axis.
+4.  **Tightness:** The box must tightly wrap the text pixels. Do not include white space around the text.
+
 **Field Mapping Instructions (Strictly follow your output schema):**
 
 *   **"item_code"**: 
@@ -75,13 +83,16 @@ const CAD_EXTRACTION_PROMPT = `You are a Senior Estimate Engineer and Quantity S
     *   If no specific note is needed, use "N/A".
 
 *   **"box"**: 
-    *   Draw accurate bounding box that fully encompasses the text or data element.
-    *   Coordinates must be normalized (0 to 1) relative to the full page size.
+    *   The normalized bounding box { left, top, right, bottom }.
 
 **Execution Rules:**
 1.  **Completeness:** If a material description spans 5 lines, capture all 5 lines in the "description" field.
 2.  **Accuracy:** Distinguish between similar numbers (e.g., 6 vs 8, 5 vs S). If ambiguous, flag it in the "notes" field.
 3.  **Grouping:** If a specific callout consists of a code ("PV 02") and a description ("100MM STONE"), return them as a SINGLE object where possible, or two tightly associated objects.
+4.  Scan the document from Top-Left to Bottom-Right.
+5.  Pay special attention to **rotated text** (vertical dimensions).
+6.  Extract numbers, units, and leader lines precisely.
+7.  If text is inside a table or title block, extract the content, not the table borders.
 
 Begin the extraction. Capture every distinct text element and numerical value on the page.`;
 
@@ -98,10 +109,10 @@ const CAD_EXTRACTION_SCHEMA = {
         type: "object",
         additionalProperties: false,
         properties: {
-          left: { type: "number" },
-          top: { type: "number" },
-          right: { type: "number" },
-          bottom: { type: "number" },
+          left: { type: "number", description: "x_min (0 to 1)" },
+          top: { type: "number", description: "y_min (0 to 1)" },
+          right: { type: "number", description: "x_max (0 to 1)" },
+          bottom: { type: "number", description: "y_max (0 to 1)" },
         },
         required: ["left", "top", "right", "bottom"],
       },
@@ -146,7 +157,6 @@ export async function extractCadBoqItemsWithGemini(params: {
       { text: CAD_EXTRACTION_PROMPT },
     ],
     config: {
-      tools: [{ googleSearch: {} }, { urlContext: {} }],
       responseMimeType: "application/json",
       responseJsonSchema: CAD_EXTRACTION_SCHEMA,
       thinkingConfig: {
@@ -154,6 +164,7 @@ export async function extractCadBoqItemsWithGemini(params: {
       },
       mediaResolution: MediaResolution.MEDIA_RESOLUTION_HIGH,
       maxOutputTokens: 65536,
+      temperature: 0.1,
     },
   };
 
@@ -171,7 +182,6 @@ export async function extractCadBoqItemsWithGemini(params: {
         model: config.geminiModel,
         mimeType,
         fileUri: uploaded.uri,
-        hasTools: true,
         responseMimeType: "application/json",
         mediaResolution: "high",
       });

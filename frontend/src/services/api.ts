@@ -14,6 +14,9 @@ import type {
   ElectricalCalcRequest,
   ElectricalCalcResponse,
   CadExtractionItem,
+  ProjectSummary,
+  ProjectFile,
+  ProjectItem,
 } from "../types";
 
 const API_BASE = "";
@@ -101,7 +104,14 @@ async function safeFetch(
     }
     throw new Error(errorMessage);
   }
-  return response.json();
+  if (response.status === 204) return null;
+  const text = await response.text();
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
 }
 
 export interface PaginatedResponse {
@@ -328,6 +338,141 @@ export async function updateDrawingPrompt(prompt: string): Promise<DrawingPrompt
     method: "PUT",
     body: JSON.stringify({ prompt }),
   });
+}
+
+export async function listProjects(): Promise<ProjectSummary[]> {
+  return safeFetch(`${API_BASE}/api/projects`);
+}
+
+export async function createProject(name?: string): Promise<ProjectSummary> {
+  return safeFetch(`${API_BASE}/api/projects`, {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  });
+}
+
+export async function updateProjectName(projectId: string, name: string): Promise<ProjectSummary> {
+  return safeFetch(`${API_BASE}/api/projects/${encodeURIComponent(projectId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ name }),
+  });
+}
+
+export async function removeProject(projectId: string): Promise<void> {
+  await safeFetch(`${API_BASE}/api/projects/${encodeURIComponent(projectId)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function retryProjectFile(projectId: string, fileId: string, idempotencyKey: string): Promise<{
+  id: string;
+  fileId: string;
+  status: "queued" | "processing" | "done" | "failed";
+  createdAt: string;
+  updatedAt: string;
+}> {
+  return safeFetch(
+    `${API_BASE}/api/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(fileId)}/retry`,
+    {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey },
+    }
+  );
+}
+
+export interface UploadProjectFilesResponse {
+  project: ProjectSummary;
+  files: ProjectFile[];
+}
+
+export async function uploadProjectFiles(
+  projectId: string,
+  drawings: File[],
+  boq?: File | null
+): Promise<UploadProjectFilesResponse> {
+  const data = new FormData();
+  drawings.forEach((file) => data.append("drawings", file));
+  if (boq) {
+    data.append("boq", boq);
+  }
+  return safeFetch(`${API_BASE}/api/projects/${encodeURIComponent(projectId)}/files`, {
+    method: "POST",
+    body: data,
+  });
+}
+
+export interface ProjectExtractionJobResponse {
+  jobs: Array<{
+    id: string;
+    fileId: string;
+    status: "queued" | "processing" | "done" | "failed";
+    createdAt: string;
+    updatedAt: string;
+  }>;
+}
+
+export async function startProjectExtraction(
+  projectId: string,
+  idempotencyKey: string,
+  fileIds?: string[]
+): Promise<ProjectExtractionJobResponse> {
+  return safeFetch(`${API_BASE}/api/projects/${encodeURIComponent(projectId)}/extractions/start`, {
+    method: "POST",
+    headers: { "Idempotency-Key": idempotencyKey },
+    body: fileIds && fileIds.length > 0 ? JSON.stringify({ fileIds }) : undefined,
+  });
+}
+
+export async function listProjectFiles(projectId: string): Promise<ProjectFile[]> {
+  return safeFetch(`${API_BASE}/api/projects/${encodeURIComponent(projectId)}/files`);
+}
+
+export async function listProjectItems(projectId: string): Promise<ProjectItem[]> {
+  return safeFetch(`${API_BASE}/api/projects/${encodeURIComponent(projectId)}/items`);
+}
+
+export async function listProjectFileItems(
+  projectId: string,
+  fileId: string
+): Promise<ProjectItem[]> {
+  return safeFetch(
+    `${API_BASE}/api/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(fileId)}/items`
+  );
+}
+
+export async function addProjectFileItem(
+  projectId: string,
+  fileId: string,
+  payload: Pick<ProjectItem, "item_code" | "description" | "notes" | "box">
+): Promise<ProjectItem> {
+  return safeFetch(
+    `${API_BASE}/api/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(fileId)}/items`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }
+  );
+}
+
+export async function updateProjectItem(
+  projectId: string,
+  itemId: string,
+  payload: Partial<Pick<ProjectItem, "item_code" | "description" | "notes" | "box">>
+): Promise<ProjectItem> {
+  return safeFetch(
+    `${API_BASE}/api/projects/${encodeURIComponent(projectId)}/items/${encodeURIComponent(itemId)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }
+  );
+}
+
+export async function removeProjectItem(projectId: string, itemId: string): Promise<void> {
+  await safeFetch(
+    `${API_BASE}/api/projects/${encodeURIComponent(projectId)}/items/${encodeURIComponent(itemId)}`,
+    { method: "DELETE" }
+  );
 }
 
 interface SaveDraftPayload {
