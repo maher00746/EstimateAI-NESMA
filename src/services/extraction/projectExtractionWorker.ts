@@ -196,12 +196,6 @@ async function processJob(jobId: string): Promise<void> {
               entry.parts.set(chunkIndex, { status: "processing" });
             }
             sheetStatus.set(sheetName, entry);
-            await createProjectLog({
-              userId: String(job.userId),
-              projectId: String(job.projectId),
-              fileId: String(job.fileId),
-              message: `Calling OpenAI for BOQ sheet ${sheetName}${chunkLabel}.`,
-            });
             return;
           }
           if (stage === "received") {
@@ -265,12 +259,6 @@ async function processJob(jobId: string): Promise<void> {
           collectedItems.push(...mapped);
         },
       });
-      await createProjectLog({
-        userId: String(job.userId),
-        projectId: String(job.projectId),
-        fileId: String(job.fileId),
-        message: `BOQ extraction completed for ${file.originalName}.`,
-      });
       items = collectedItems;
 
       const existingMap = new Map(
@@ -310,12 +298,7 @@ async function processJob(jobId: string): Promise<void> {
         }
       ).exec();
     } else {
-      await createProjectLog({
-        userId: String(job.userId),
-        projectId: String(job.projectId),
-        fileId: String(job.fileId),
-        message: `Calling Gemini API for ${file.originalName}.`,
-      });
+      // No log for "calling" to keep processing log concise.
       const result = await extractCadBoqItemsWithGemini({
         filePath: file.storedPath,
         fileName: file.originalName,
@@ -324,7 +307,7 @@ async function processJob(jobId: string): Promise<void> {
         userId: String(job.userId),
         projectId: String(job.projectId),
         fileId: String(job.fileId),
-        message: `Gemini response received for ${file.originalName}.`,
+        message: `Data received for ${file.originalName}.`,
       });
 
       await ProjectItemModel.deleteMany({
@@ -352,12 +335,6 @@ async function processJob(jobId: string): Promise<void> {
     if (file.fileType !== "boq") {
       await ProjectFileModel.updateOne({ _id: file._id }, { status: "ready" }).exec();
     }
-    await createProjectLog({
-      userId: String(job.userId),
-      projectId: String(job.projectId),
-      fileId: String(job.fileId),
-      message: `Extraction completed for ${file.originalName} (${items.length} items).`,
-    });
     await ProjectExtractJobModel.updateOne(
       { _id: job._id },
       {

@@ -423,6 +423,13 @@ router.delete(
         await fs.rm(file.storedPath, { force: true });
       }
 
+      await createProjectLog({
+        userId,
+        projectId,
+        fileId,
+        message: `File deleted: ${file.originalName}.`,
+      });
+
       res.status(204).send();
     } catch (error) {
       next(error);

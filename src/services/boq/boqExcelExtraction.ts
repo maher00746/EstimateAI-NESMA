@@ -45,11 +45,12 @@ Task:
 - Output JSON ONLY that matches the schema.
 
 Rules:
-1) Input rows are in order. Keep the output in the same order (ascending rowIndex).
+1) Input rows are in order. Keep the output in the same order (CRITICAL), each extracted item should be in the same order as input.
 2) A category row is usually a text-only row. Use its exact text as category.
-3) A BOQ item row contains an item key (e.g., A, B, C ..) and a description. It may also include quantity, unit, rate, and amount.
+3) A BOQ item row contains an item key (e.g., A, B, C ,1, 2 ..) and a description. It may also include quantity, unit, rate, and amount.
 4) If a field is missing in the row, return an empty string for that field.
 5) Do NOT include category-only or subcategory-only rows in the output; they only set context for the following items.
+6) Do NOT return empty rows in the output (no description)
 
 Return only a JSON object with this shape:
 {
@@ -103,11 +104,13 @@ function trimTrailingEmptyCells(cells: string[]): string[] {
   return cells.slice(0, lastIdx + 1);
 }
 
-function normalizeRows(rows: Array<Array<unknown>>): Array<{ rowIndex: number; cells: string[] }> {
+function normalizeRows(
+  rows: Array<{ rowIndex: number; row: Array<unknown> }>
+): Array<{ rowIndex: number; cells: string[] }> {
   return rows
-    .map((row, idx) => {
-      const cells = Array.from({ length: row?.length ?? 0 }, (_, col) => coerceCell(row?.[col]));
-      return { rowIndex: idx, cells: trimTrailingEmptyCells(cells) };
+    .map((entry) => {
+      const cells = Array.from({ length: entry.row?.length ?? 0 }, (_, col) => coerceCell(entry.row?.[col]));
+      return { rowIndex: entry.rowIndex, cells: trimTrailingEmptyCells(cells) };
     })
     .filter((entry) => entry.cells.some((cell) => String(cell).trim() !== ""));
 }
@@ -138,25 +141,37 @@ function isRowEmpty(row: Array<unknown>): boolean {
 }
 
 function splitRowsByEmptyRows(
-  rows: Array<Array<unknown>>,
+  rows: Array<{ rowIndex: number; row: Array<unknown> }>,
   maxRowsPerChunk: number
-): Array<Array<Array<unknown>>> {
+): Array<Array<{ rowIndex: number; row: Array<unknown> }>> {
   if (rows.length === 0) return [];
-  const chunks: Array<Array<Array<unknown>>> = [];
+  const chunks: Array<Array<{ rowIndex: number; row: Array<unknown> }>> = [];
   let startIdx = 0;
-  let lastEmptyIdx = -1;
   let i = 0;
+  let emptyStreak = 0;
+  let lastSeparatorStart = -1;
+  let lastSeparatorEnd = -1;
 
   while (i < rows.length) {
-    if (isRowEmpty(rows[i])) {
-      lastEmptyIdx = i;
+    if (isRowEmpty(rows[i].row)) {
+      emptyStreak += 1;
+      if (emptyStreak === 2) {
+        lastSeparatorStart = i - 1;
+      }
+      if (emptyStreak >= 2) {
+        lastSeparatorEnd = i;
+      }
+    } else {
+      emptyStreak = 0;
     }
 
     const currentSize = i - startIdx + 1;
-    if (currentSize >= maxRowsPerChunk && lastEmptyIdx >= startIdx) {
-      chunks.push(rows.slice(startIdx, lastEmptyIdx));
-      startIdx = lastEmptyIdx + 1;
-      lastEmptyIdx = -1;
+    if (currentSize >= maxRowsPerChunk && lastSeparatorStart >= startIdx) {
+      chunks.push(rows.slice(startIdx, lastSeparatorStart));
+      startIdx = lastSeparatorEnd + 1;
+      emptyStreak = 0;
+      lastSeparatorStart = -1;
+      lastSeparatorEnd = -1;
       i = startIdx;
       continue;
     }
@@ -272,7 +287,11 @@ export async function extractBoqItemsFromExcel(params: {
         return { sheetName, items: [] as BoqSheetItem[], rawText: "" };
       }
 
-      const chunks = rows.length > MAX_ROWS_PER_CHUNK ? splitRowsByEmptyRows(rows, MAX_ROWS_PER_CHUNK) : [rows];
+      const indexedRows = rows.map((row, rowIndex) => ({ rowIndex, row }));
+      const chunks =
+        indexedRows.length > MAX_ROWS_PER_CHUNK
+          ? splitRowsByEmptyRows(indexedRows, MAX_ROWS_PER_CHUNK)
+          : [indexedRows];
       const chunkCount = chunks.length;
       const retryChunkIndices = params.retryParts?.[sheetName];
       const chunkTasks = chunks.map((chunkRows, chunkIndex) => ({ chunkRows, chunkIndex }))
@@ -282,7 +301,8 @@ export async function extractBoqItemsFromExcel(params: {
           return retryChunkIndices.includes(chunk.chunkIndex);
         });
 
-      const chunkPromises = chunkTasks.map(async ({ chunkRows, chunkIndex }) => {
+      const chunkResults: Array<{ partIndex: number; items: BoqSheetItem[]; rawText: string }> = [];
+      for (const { chunkRows, chunkIndex } of chunkTasks) {
         const normalized = stripEmptyColumns(normalizeRows(chunkRows));
         await params.onSheetStage?.({ sheetName, stage: "calling", chunkIndex, chunkCount });
         try {
@@ -300,7 +320,7 @@ export async function extractBoqItemsFromExcel(params: {
             chunkIndex,
             chunkCount,
           });
-          return { partIndex: chunkIndex, ...extracted };
+          chunkResults.push({ partIndex: chunkIndex, ...extracted });
         } catch (error) {
           await params.onSheetStage?.({
             sheetName,
@@ -309,11 +329,10 @@ export async function extractBoqItemsFromExcel(params: {
             chunkIndex,
             chunkCount,
           });
-          return { partIndex: chunkIndex, items: [] as BoqSheetItem[], rawText: "" };
+          chunkResults.push({ partIndex: chunkIndex, items: [] as BoqSheetItem[], rawText: "" });
         }
-      });
+      }
 
-      const chunkResults = await Promise.all(chunkPromises);
       const orderedChunks = [...chunkResults].sort((a, b) => a.partIndex - b.partIndex);
       const mergedItems = orderedChunks.flatMap((result) => result.items ?? []);
       const mergedRaw = orderedChunks.map((result) => result.rawText).filter(Boolean).join("\n\n");
@@ -334,8 +353,8 @@ export async function extractBoqItemsFromExcel(params: {
       };
       items.push({
         item_code: item.item_key || "ITEM",
-        description: item.description || "N/A",
-        notes: item.notes || "N/A",
+        description: item.description || "",
+        notes: item.notes || "",
         metadata: {
           sheetName,
           category: item.category || undefined,

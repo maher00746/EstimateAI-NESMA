@@ -304,7 +304,7 @@ export default function CadExtraction({
                           placeholder={`Item ${idx + 1}`}
                         />
                       ) : (
-                        item.item_code || `Item ${idx + 1}`
+                        (item.item_code ?? "").trim() === "ITEM" ? "" : item.item_code || `Item ${idx + 1}`
                       )}
                     </td>
                     <td>
@@ -328,7 +328,7 @@ export default function CadExtraction({
                           placeholder="Notes"
                         />
                       ) : (
-                        item.notes || "—"
+                        (item.item_code ?? "").trim() === "ITEM" ? "" : item.notes || "—"
                       )}
                     </td>
                     {isReviewMode && (

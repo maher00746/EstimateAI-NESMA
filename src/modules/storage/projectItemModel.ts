@@ -59,4 +59,3 @@ ProjectItemSchema.index({ projectId: 1, fileId: 1 });
 export const ProjectItemModel =
   mongoose.models.ProjectItem ?? mongoose.model<ProjectItemDocument>("ProjectItem", ProjectItemSchema);
 
-export type { ProjectItemDocument };

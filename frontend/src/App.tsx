@@ -42,6 +42,19 @@ const renderCell = (value: string | number | null | undefined) => {
   return <span className="cell-text" title={text}>{text}</span>;
 };
 
+const renderEmptyCell = () => <span className="cell-text" />;
+
+const renderItemCodeCell = (value: string | number | null | undefined) => {
+  const text = value === null || value === undefined ? "" : String(value).trim();
+  if (text === "ITEM") {
+    return renderEmptyCell();
+  }
+  return renderCell(value);
+};
+
+const isItemPlaceholder = (value: string | number | null | undefined) =>
+  value !== null && value !== undefined && String(value).trim() === "ITEM";
+
 const normalizeColumn = (value: string): string =>
   value.trim().toLowerCase().replace(/\s+/g, " ");
 
@@ -567,6 +580,10 @@ export default function App() {
       return aIndex - bIndex;
     });
   }, [activeBoqTabId, boqItems]);
+  const filteredBoqItemCount = useMemo(
+    () => filteredBoqItems.filter((item) => String(item.item_code ?? "").trim() !== "").length,
+    [filteredBoqItems]
+  );
   const boqColumns = useMemo(() => ["Item", "Description", "QTY", "Unit", "Rate", "Amount"], []);
   const getBoqCellValue = (item: ProjectItem, column: string) => {
     const key = normalizeColumn(column);
@@ -1022,10 +1039,11 @@ export default function App() {
                         drawingItems.map((item) => {
                           const isEditing = editingItemId === item.id;
                           const draft = itemDrafts[item.id];
+                          const hideNonDescription = isItemPlaceholder(item.item_code);
                           return (
                             <tr key={item.id} className="matches-table__row">
-                              <td>{renderCell(item.fileNo)}</td>
-                              <td>{renderCell(item.fileName)}</td>
+                              <td>{hideNonDescription ? renderEmptyCell() : renderCell(item.fileNo)}</td>
+                              <td>{hideNonDescription ? renderEmptyCell() : renderCell(item.fileName)}</td>
                               <td>
                                 {isEditing ? (
                                   <input
@@ -1034,7 +1052,7 @@ export default function App() {
                                     onChange={(event) => handleItemDraftChange(item.id, "item_code", event.target.value)}
                                   />
                                 ) : (
-                                  renderCell(item.item_code)
+                                  hideNonDescription ? renderEmptyCell() : renderItemCodeCell(item.item_code)
                                 )}
                               </td>
                               <td>
@@ -1056,7 +1074,7 @@ export default function App() {
                                     onChange={(event) => handleItemDraftChange(item.id, "notes", event.target.value)}
                                   />
                                 ) : (
-                                  renderCell(item.notes)
+                                  hideNonDescription ? renderEmptyCell() : renderCell(item.notes)
                                 )}
                               </td>
                               <td>
@@ -1138,7 +1156,7 @@ export default function App() {
               </div>
 
               <div style={{ marginTop: "1.5rem" }}>
-                <h3 style={{ marginTop: 0 }}>BOQ Items</h3>
+                <h3 style={{ marginTop: 0 }}>BOQ Items ({filteredBoqItemCount})</h3>
                 {boqItems.length === 0 ? (
                   <div className="status" style={{ padding: "0.75rem", background: "rgba(255,255,255,0.04)" }}>
                     No BOQ items extracted yet.
@@ -1199,6 +1217,7 @@ export default function App() {
                               }
                               const itemCode = (item.item_code ?? "").trim();
                               const highlightItemCode = /^[A-Z]$/.test(itemCode);
+                              const hideNonDescription = isItemPlaceholder(item.item_code);
                               rows.push(
                                 <tr
                                   key={item.id}
@@ -1206,7 +1225,21 @@ export default function App() {
                                   style={highlightItemCode ? { color: "#72fcd1" } : undefined}
                                 >
                                   {boqColumns.map((col) => (
-                                    <td key={`${item.id}-${col}`}>{renderCell(getBoqCellValue(item, col))}</td>
+                                    <td key={`${item.id}-${col}`}>
+                                      {(() => {
+                                        const normalizedCol = normalizeColumn(col);
+                                        if (normalizedCol === "description") {
+                                          return renderCell(getBoqCellValue(item, col));
+                                        }
+                                        if (hideNonDescription) {
+                                          return renderEmptyCell();
+                                        }
+                                        if (normalizedCol === "item") {
+                                          return renderItemCodeCell(item.item_code);
+                                        }
+                                        return renderCell(getBoqCellValue(item, col));
+                                      })()}
+                                    </td>
                                   ))}
                                 </tr>
                               );
