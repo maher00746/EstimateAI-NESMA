@@ -219,11 +219,18 @@ export interface ProjectItem {
   fileId: string;
   fileNo?: number | null;
   fileName?: string | null;
-  source: "cad" | "manual";
+  source: "cad" | "manual" | "boq";
   item_code: string;
   description: string;
   notes: string;
   box?: CadExtractionBox | null;
+  metadata?: {
+    sheetName?: string;
+    category?: string;
+    subcategory?: string;
+    rowIndex?: number;
+    fields?: Record<string, string>;
+  } | null;
   createdAt: string;
   updatedAt: string;
 }

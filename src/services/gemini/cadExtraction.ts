@@ -47,12 +47,14 @@ async function waitForFileReady(
   throw new Error(`Timeout waiting for file to be ready after ${maxWaitMs}ms`);
 }
 
-const CAD_EXTRACTION_PROMPT = `You are a Senior Estimate Engineer and Quantity Surveyor performing a detailed forensic takeoff from construction drawings. Your goal is to digitize every single annotation, dimension, and specification for a Bill of Quantities (BOQ).
+const CAD_EXTRACTION_PROMPT = `You are a Senior Estimate Engineer and Quantity Surveyor performing a detailed takeoff from construction drawings. Your goal is to extract ONLY the items that are required for the Bill of Quantities (BOQ) and client estimation.
 
 **Input Analysis Strategy:**
 1.  **Scan Strategy:** Systematically scan the page (e.g., Title Block -> General Notes -> Plan Views -> Section Details).
-2.  **Detail Capture:** Do not ignore small text, vertical text, or text inside hatch patterns. Capture everything.
-3.  **Context Awareness:** Associate labels with their leaders/arrows to understand what they point to.
+2.  **BOQ-Only Capture:** Capture ONLY content that contributes to quantity takeoff or cost estimation (materials, measurable dimensions, levels/elevations tied to quantities, specification notes that affect quantities, and space/area identifiers that define measurable scope).
+3.  **Include Area/Space Items:** Extract names/labels of measurable spaces or components such as villas, parks, terraces, rooms, zones, plots, and any area tag with its associated size or quantity (e.g., "VILLA A", "PARK", "TERRACE", "AREA 120 m²", "PLOT 05").
+4.  **Ignore Non-BOQ:** Do NOT capture administrative metadata, drawing numbers, revision tables, sheet titles, consultant logos, coordinate grids, north arrows, scale bars, or any text that does not affect quantities or cost.
+5.  **Context Awareness:** Associate labels with their leaders/arrows to understand what they point to.
 
 **COORDINATE SYSTEM INSTRUCTIONS (CRITICAL):**
 1.  **Normalization:** Return coordinates as Normalized values between 0.0 and 1.0 relative to the page size.
@@ -63,6 +65,14 @@ const CAD_EXTRACTION_PROMPT = `You are a Senior Estimate Engineer and Quantity S
 4.  **Tightness:** The box must tightly wrap the text pixels. Do not include white space around the text.
 
 **Field Mapping Instructions (Strictly follow your output schema):**
+
+**Box-First Visual Line Mode (Critical):**
+1.  For each distinct text element, locate the **tight bounding box first**.
+2.  Only after the box is located, read the text **inside that box**.
+3.  Do not infer or reconstruct text that is outside the box. If unclear, mark it in "notes".
+
+*   **"box"**: 
+    *   The normalized bounding box { left, top, right, bottom }.
 
 *   **"item_code"**: 
     *   If the text is a material specification with a code (e.g., "PV 02", "ST-01", "PB 03"), extract **only** that code here.
@@ -82,19 +92,18 @@ const CAD_EXTRACTION_PROMPT = `You are a Senior Estimate Engineer and Quantity S
     *   Example: "Located in Section 1", "Vertical text", "Uncertain text due to blur", or "Connected via leader line".
     *   If no specific note is needed, use "N/A".
 
-*   **"box"**: 
-    *   The normalized bounding box { left, top, right, bottom }.
-
 **Execution Rules:**
-1.  **Completeness:** If a material description spans 5 lines, capture all 5 lines in the "description" field.
+1.  **Completeness:** If a BOQ-relevant material description spans 5 lines, capture all 5 lines in the "description" field.
 2.  **Accuracy:** Distinguish between similar numbers (e.g., 6 vs 8, 5 vs S). If ambiguous, flag it in the "notes" field.
-3.  **Grouping:** If a specific callout consists of a code ("PV 02") and a description ("100MM STONE"), return them as a SINGLE object where possible, or two tightly associated objects.
+3.  **Grouping:** If a specific BOQ callout consists of a code ("PV 02") and a description ("100MM STONE"), return them as a SINGLE object where possible, or two tightly associated objects.
 4.  Scan the document from Top-Left to Bottom-Right.
 5.  Pay special attention to **rotated text** (vertical dimensions).
-6.  Extract numbers, units, and leader lines precisely.
-7.  If text is inside a table or title block, extract the content, not the table borders.
+6.  Extract numbers, units, and leader lines precisely when they are BOQ-related.
+7.  If a space/area label appears without a numeric size nearby, still extract the label as a BOQ item and note "Area size not shown" in "notes".
+8.  If text is inside a table or title block, extract ONLY the BOQ-relevant content, not the table borders or unrelated metadata.
+9.  **Dimension Association (Critical):** If a dimension is clearly linked to a named item/space/material (by proximity, shared leader line, or same callout), INCLUDE the dimension value inside that item's "description" and DO NOT emit a separate "DIMENSION" item for it. Only emit standalone "DIMENSION" items when the dimension is not clearly tied to any specific BOQ item.
 
-Begin the extraction. Capture every distinct text element and numerical value on the page.`;
+Begin the extraction. Capture ONLY distinct BOQ-related text elements and numerical values on the page. If it is not related to BOQ or estimation, ignore it.`;
 
 const CAD_EXTRACTION_SCHEMA = {
   type: "array",
@@ -162,7 +171,7 @@ export async function extractCadBoqItemsWithGemini(params: {
       thinkingConfig: {
         thinkingBudget: Number.isFinite(config.geminiThinkingBudget) ? config.geminiThinkingBudget : 16384,
       },
-      mediaResolution: MediaResolution.MEDIA_RESOLUTION_HIGH,
+      mediaResolution: MediaResolution.MEDIA_RESOLUTION_MEDIUM,
       maxOutputTokens: 65536,
       temperature: 0.1,
     },

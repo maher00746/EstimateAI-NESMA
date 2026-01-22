@@ -1,6 +1,6 @@
 import mongoose, { Schema } from "mongoose";
 
-export type ProjectItemSource = "cad" | "manual";
+export type ProjectItemSource = "cad" | "manual" | "boq";
 
 export type CadBox = {
   left: number;
@@ -18,6 +18,13 @@ export interface ProjectItemDocument extends mongoose.Document {
   description: string;
   notes: string;
   box?: CadBox | null;
+  metadata?: {
+    sheetName?: string;
+    category?: string;
+    subcategory?: string;
+    rowIndex?: number;
+    fields?: Record<string, string>;
+  } | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -42,6 +49,7 @@ const ProjectItemSchema = new Schema<ProjectItemDocument>(
     description: { type: String, required: true },
     notes: { type: String, required: true },
     box: { type: CadBoxSchema, default: null },
+    metadata: { type: Schema.Types.Mixed, default: null },
   },
   { timestamps: true }
 );

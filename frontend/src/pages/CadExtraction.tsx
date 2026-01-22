@@ -31,6 +31,18 @@ const normalizeBox = (box: CadExtractionBox | null | undefined): CadExtractionBo
   return { left, top, right, bottom };
 };
 
+const serializeCadItems = (items: CadItemWithId[]): string => {
+  return JSON.stringify(
+    items.map((item) => ({
+      id: item.id,
+      item_code: item.item_code ?? "",
+      description: item.description ?? "",
+      notes: item.notes ?? "",
+      box: normalizeBox(item.box) ?? null,
+    }))
+  );
+};
+
 export default function CadExtraction({
   mode = "upload",
   fileUrl: externalFileUrl,
@@ -48,6 +60,8 @@ export default function CadExtraction({
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>("");
+  const [initialSnapshot, setInitialSnapshot] = useState("");
+  const [showUnsavedPrompt, setShowUnsavedPrompt] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const tableRowRefs = useRef<Record<string, HTMLTableRowElement | null>>({});
   const tableScrollRef = useRef<HTMLDivElement | null>(null);
@@ -57,9 +71,11 @@ export default function CadExtraction({
 
   useEffect(() => {
     if (isReviewMode) {
+      const nextItems = externalItems || [];
       setFileUrl(externalFileUrl || "");
-      setItems(externalItems || []);
+      setItems(nextItems);
       setHasExtracted(true);
+      setInitialSnapshot(serializeCadItems(nextItems));
       return;
     }
     if (!selectedFile) {
@@ -72,6 +88,11 @@ export default function CadExtraction({
       if (url.startsWith("blob:")) URL.revokeObjectURL(url);
     };
   }, [selectedFile, externalFileUrl, externalItems, isReviewMode]);
+  const hasUnsavedChanges = useMemo(() => {
+    if (!isReviewMode) return false;
+    return initialSnapshot !== serializeCadItems(items);
+  }, [initialSnapshot, isReviewMode, items]);
+
 
   useEffect(() => {
     if (!selectedItemId) return;
@@ -163,17 +184,42 @@ export default function CadExtraction({
   }, []);
 
   const handleSave = useCallback(async () => {
-    if (!onSave) return;
+    if (!onSave) return false;
     setSaving(true);
     setError("");
     try {
       await onSave(items);
+      setInitialSnapshot(serializeCadItems(items));
+      return true;
     } catch (err) {
       setError((err as Error).message || "Failed to save items.");
+      return false;
     } finally {
       setSaving(false);
     }
   }, [items, onSave]);
+
+  const handleBackClick = useCallback(() => {
+    if (!onBack) return;
+    if (hasUnsavedChanges) {
+      setShowUnsavedPrompt(true);
+      return;
+    }
+    onBack();
+  }, [hasUnsavedChanges, onBack]);
+
+  const handleDiscardChanges = useCallback(() => {
+    if (!onBack) return;
+    setShowUnsavedPrompt(false);
+    onBack();
+  }, [onBack]);
+
+  const handleSaveAndBack = useCallback(async () => {
+    const saved = await handleSave();
+    if (!saved) return;
+    setShowUnsavedPrompt(false);
+    onBack?.();
+  }, [handleSave, onBack]);
 
   const headerLeft = (
     <div style={{ display: "flex", flexDirection: "column" }}>
@@ -393,7 +439,7 @@ export default function CadExtraction({
         headerActions={
           <div style={{ display: "flex", gap: "0.5rem" }}>
             {onBack && (
-              <button type="button" className="btn-secondary" onClick={onBack}>
+              <button type="button" className="btn-secondary" onClick={handleBackClick}>
                 Back
               </button>
             )}
@@ -432,6 +478,32 @@ export default function CadExtraction({
           setSelectedItemId(id);
         }}
       />
+      {showUnsavedPrompt && (
+        <div className="modal-backdrop" role="presentation">
+          <div className="modal" role="dialog" aria-modal="true" aria-labelledby="unsaved-changes-title">
+            <div className="modal__header">
+              <h3 className="modal__title" id="unsaved-changes-title">Unsaved changes</h3>
+              <button type="button" className="modal__close" onClick={() => setShowUnsavedPrompt(false)}>
+                ×
+              </button>
+            </div>
+            <div className="modal__body">
+              <p>You have unsaved edits. Save before leaving?</p>
+            </div>
+            <div className="modal__footer">
+              <button type="button" className="btn-secondary" onClick={() => setShowUnsavedPrompt(false)} disabled={saving}>
+                Stay
+              </button>
+              <button type="button" className="btn-secondary" onClick={handleDiscardChanges} disabled={saving}>
+                Discard
+              </button>
+              <button type="button" className="btn-match" onClick={() => void handleSaveAndBack()} disabled={saving}>
+                {saving ? "Saving…" : "Save & Leave"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

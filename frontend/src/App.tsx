@@ -11,6 +11,7 @@ import {
   listProjects,
   removeProjectItem,
   removeProject,
+  removeProjectFile,
   retryProjectFile,
   startProjectExtraction,
   updateProjectName,
@@ -40,11 +41,16 @@ const renderCell = (value: string | number | null | undefined) => {
   return <span className="cell-text" title={text}>{text}</span>;
 };
 
+const normalizeColumn = (value: string): string =>
+  value.trim().toLowerCase().replace(/\s+/g, " ");
+
 export default function App() {
   const [activePage, setActivePage] = useState<AppPage>("home");
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [projectsLoading, setProjectsLoading] = useState(false);
+  const [openingProject, setOpeningProject] = useState(false);
+  const [pageLoadingMessage, setPageLoadingMessage] = useState<string | null>(null);
   const [activeProject, setActiveProject] = useState<ProjectSummary | null>(null);
   const [projectFiles, setProjectFiles] = useState<ProjectFile[]>([]);
   const [projectItems, setProjectItems] = useState<ProjectItem[]>([]);
@@ -57,6 +63,8 @@ export default function App() {
   const [projectNameInput, setProjectNameInput] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<ProjectSummary | null>(null);
   const [deletingProject, setDeletingProject] = useState(false);
+  const [deleteFileTarget, setDeleteFileTarget] = useState<ProjectFile | null>(null);
+  const [deletingFile, setDeletingFile] = useState(false);
   const [addFilesOpen, setAddFilesOpen] = useState(false);
   const [addDrawings, setAddDrawings] = useState<File[]>([]);
   const [addBoq, setAddBoq] = useState<File | null>(null);
@@ -65,6 +73,12 @@ export default function App() {
   const [notifications, setNotifications] = useState<Array<{ id: string; message: string }>>([]);
   const lastFileStatusRef = useRef<Map<string, ProjectFile["status"]>>(new Map());
   const [streamStatus, setStreamStatus] = useState<"connecting" | "connected" | "error">("connecting");
+  const [editingItemId, setEditingItemId] = useState<string | null>(null);
+  const [itemDrafts, setItemDrafts] = useState<Record<string, { item_code: string; description: string; notes: string }>>({});
+  const [savingItemId, setSavingItemId] = useState<string | null>(null);
+  const [deletingItemId, setDeletingItemId] = useState<string | null>(null);
+  const [deleteItemTarget, setDeleteItemTarget] = useState<ProjectItem | null>(null);
+  const [activeBoqTab, setActiveBoqTab] = useState<string>("all");
 
   const pushNotification = useCallback((message: string) => {
     const id = `${Date.now()}-${Math.random()}`;
@@ -178,6 +192,7 @@ export default function App() {
   }, [refreshProjects]);
 
   const handleOpenProject = useCallback(async (project: ProjectSummary) => {
+    setOpeningProject(true);
     setActiveProject(project);
     setActivePage("extract");
     setMaxStepReached(1);
@@ -185,6 +200,8 @@ export default function App() {
       await refreshProjectData(project.id);
     } catch (error) {
       setFeedback((error as Error).message || "Failed to load project data.");
+    } finally {
+      setOpeningProject(false);
     }
   }, [refreshProjectData]);
 
@@ -205,6 +222,26 @@ export default function App() {
       setDeletingProject(false);
     }
   }, [activeProject, deleteTarget, refreshProjects]);
+
+  const handleDeleteFile = useCallback(async () => {
+    if (!activeProject || !deleteFileTarget) return;
+    setDeletingFile(true);
+    try {
+      await removeProjectFile(activeProject.id, deleteFileTarget.id);
+      if (activeFile?.id === deleteFileTarget.id) {
+        setActiveFile(null);
+        setActivePage("extract");
+      }
+      setDeleteFileTarget(null);
+      await refreshProjectData(activeProject.id);
+      setFeedback("File deleted.");
+      setTimeout(() => setFeedback(""), 3000);
+    } catch (error) {
+      setFeedback((error as Error).message || "Failed to delete file.");
+    } finally {
+      setDeletingFile(false);
+    }
+  }, [activeFile, activeProject, deleteFileTarget, refreshProjectData]);
 
   const handleRetryFile = useCallback(
     async (file: ProjectFile) => {
@@ -227,30 +264,114 @@ export default function App() {
       setFeedback("Please upload drawings or a BOQ file.");
       return;
     }
+    setPageLoadingMessage("Preparing extraction…");
     try {
       const trimmedName = projectNameInput.trim();
       if (trimmedName && trimmedName !== activeProject.name) {
         const updated = await updateProjectName(activeProject.id, trimmedName);
         setActiveProject(updated);
       }
-      await uploadProjectFiles(activeProject.id, drawings, boqFile);
-      await startProjectExtraction(activeProject.id, uuidv4());
+      const uploaded = await uploadProjectFiles(activeProject.id, drawings, boqFile);
+      const uploadedIds = uploaded.files.map((file) => file.id);
+      await startProjectExtraction(activeProject.id, uuidv4(), uploadedIds);
       setActivePage("extract");
       setMaxStepReached(1);
       await refreshProjectData(activeProject.id);
     } catch (error) {
       setFeedback((error as Error).message || "Failed to start extraction.");
+    } finally {
+      setPageLoadingMessage(null);
     }
   }, [activeProject, boqFile, drawings, projectNameInput, refreshProjectData]);
 
   const handleOpenFile = useCallback(async (file: ProjectFile) => {
     if (!activeProject) return;
+    setPageLoadingMessage("Opening file…");
     setActiveFile(file);
     setActivePage("file-review");
-    const items = await listProjectFileItems(activeProject.id, file.id);
-    setFileItems(items);
-    setFileItemsSnapshot(items);
+    try {
+      const items = await listProjectFileItems(activeProject.id, file.id);
+      setFileItems(items);
+      setFileItemsSnapshot(items);
+    } catch (error) {
+      setFeedback((error as Error).message || "Failed to load file items.");
+    } finally {
+      setPageLoadingMessage(null);
+    }
   }, [activeProject]);
+
+  const handleEditItem = useCallback((item: ProjectItem) => {
+    setEditingItemId(item.id);
+    setItemDrafts((prev) => ({
+      ...prev,
+      [item.id]: {
+        item_code: item.item_code ?? "",
+        description: item.description ?? "",
+        notes: item.notes ?? "",
+      },
+    }));
+  }, []);
+
+  const handleItemDraftChange = useCallback(
+    (itemId: string, field: "item_code" | "description" | "notes", value: string) => {
+      setItemDrafts((prev) => ({
+        ...prev,
+        [itemId]: {
+          ...prev[itemId],
+          [field]: value,
+        },
+      }));
+    },
+    []
+  );
+
+  const handleCancelEditItem = useCallback((itemId: string) => {
+    setItemDrafts((prev) => {
+      const next = { ...prev };
+      delete next[itemId];
+      return next;
+    });
+    setEditingItemId(null);
+  }, []);
+
+  const handleSaveItem = useCallback(
+    async (itemId: string) => {
+      if (!activeProject) return;
+      const draft = itemDrafts[itemId];
+      if (!draft) return;
+      setSavingItemId(itemId);
+      try {
+        const updated = await updateProjectItem(activeProject.id, itemId, draft);
+        setProjectItems((prev) =>
+          prev.map((item) =>
+            item.id === itemId
+              ? { ...item, item_code: updated.item_code, description: updated.description, notes: updated.notes, box: updated.box ?? item.box }
+              : item
+          )
+        );
+        handleCancelEditItem(itemId);
+      } catch (error) {
+        setFeedback((error as Error).message || "Failed to update item.");
+      } finally {
+        setSavingItemId(null);
+      }
+    },
+    [activeProject, handleCancelEditItem, itemDrafts]
+  );
+
+  const handleDeleteItem = useCallback(async () => {
+    if (!activeProject || !deleteItemTarget) return;
+    setDeletingItemId(deleteItemTarget.id);
+    try {
+      await removeProjectItem(activeProject.id, deleteItemTarget.id);
+      setProjectItems((prev) => prev.filter((item) => item.id !== deleteItemTarget.id));
+      setDeleteItemTarget(null);
+    } catch (error) {
+      setFeedback((error as Error).message || "Failed to delete item.");
+    } finally {
+      setDeletingItemId(null);
+    }
+  }, [activeProject, deleteItemTarget]);
 
   const handleSaveFileItems = useCallback(
     async (items: CadItemWithId[]) => {
@@ -416,6 +537,48 @@ export default function App() {
     box: item.box ?? { left: 0, top: 0, right: 0, bottom: 0 },
   }));
 
+  const drawingItems = useMemo(
+    () => projectItems.filter((item) => item.source !== "boq"),
+    [projectItems]
+  );
+  const boqItems = useMemo(
+    () => projectItems.filter((item) => item.source === "boq"),
+    [projectItems]
+  );
+  const boqTabs = useMemo(() => {
+    const sheetNames = Array.from(
+      new Set(boqItems.map((item) => item.metadata?.sheetName).filter(Boolean))
+    ) as string[];
+    return [
+      { id: "all", label: "All BOQ" },
+      ...sheetNames.map((sheet) => ({ id: `sheet:${sheet}`, label: sheet })),
+    ];
+  }, [boqItems]);
+  const activeBoqTabId = boqTabs.some((tab) => tab.id === activeBoqTab) ? activeBoqTab : "all";
+  const filteredBoqItems = useMemo(() => {
+    const items =
+      activeBoqTabId === "all"
+        ? boqItems
+        : boqItems.filter((item) => item.metadata?.sheetName === activeBoqTabId.replace(/^sheet:/, ""));
+    return [...items].sort((a, b) => {
+      const aIndex = a.metadata?.rowIndex ?? 0;
+      const bIndex = b.metadata?.rowIndex ?? 0;
+      return aIndex - bIndex;
+    });
+  }, [activeBoqTabId, boqItems]);
+  const boqColumns = useMemo(() => ["Item", "Description", "QTY", "Unit"], []);
+  const getBoqCellValue = (item: ProjectItem, column: string) => {
+    const key = normalizeColumn(column);
+    const fields = item.metadata?.fields ?? {};
+    const findField = (candidates: string[]) =>
+      fields[Object.keys(fields).find((k) => candidates.includes(normalizeColumn(k))) ?? ""];
+    if (key === "item") return item.item_code;
+    if (key === "description") return item.description;
+    if (key === "qty") return findField(["qty", "quantity", "q'ty", "qnty"]) ?? "—";
+    if (key === "unit") return findField(["unit", "uom", "unit of measure"]) ?? "—";
+    return "—";
+  };
+
   return (
     <div className={`app-shell ${isSidebarOpen ? "sidebar-open" : "sidebar-collapsed"}`}>
       <aside className="sidebar">
@@ -508,6 +671,32 @@ export default function App() {
       )}
 
       <main className="content" style={activePage === "file-review" ? { padding: 0, maxWidth: "none", height: "100vh", overflow: "hidden" } : undefined}>
+        {(openingProject || pageLoadingMessage) && (
+          <div className="processing-overlay">
+            <div className="processing-indicator">
+              <div className="processing-indicator__spinner">
+                <svg width="40" height="40" viewBox="0 0 40 40" className="spinner">
+                  <circle
+                    cx="20"
+                    cy="20"
+                    r="16"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="3"
+                    strokeDasharray="80"
+                    strokeDashoffset="20"
+                    strokeLinecap="round"
+                  />
+                </svg>
+              </div>
+              <div className="processing-indicator__text">
+                <p className="processing-indicator__message">
+                  {openingProject ? "Opening project…" : pageLoadingMessage}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
         {feedback && <p className="feedback">{feedback}</p>}
 
         {(activePage === "projects" || activePage === "home") && (
@@ -770,25 +959,33 @@ export default function App() {
                           <td>{renderCell(file.fileType)}</td>
                           <td>{renderFileStatus(file.status)}</td>
                           <td>
-                            {file.fileType === "drawing" ? (
-                              <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                              {file.fileType === "drawing" ? (
                                 <button type="button" className="btn-secondary" onClick={() => void handleOpenFile(file)}>
                                   Go to File
                                 </button>
-                                {file.status === "failed" && (
-                                  <button
-                                    type="button"
-                                    className="btn-secondary"
-                                    onClick={() => void handleRetryFile(file)}
-                                    disabled={retryingFileId === file.id}
-                                  >
-                                    {retryingFileId === file.id ? "Retrying…" : "Retry"}
-                                  </button>
-                                )}
-                              </div>
-                            ) : (
-                              <span className="status">BOQ</span>
-                            )}
+                              ) : (
+                                <span className="status">BOQ</span>
+                              )}
+                              {file.fileType === "drawing" && file.status === "failed" && (
+                                <button
+                                  type="button"
+                                  className="btn-secondary"
+                                  onClick={() => void handleRetryFile(file)}
+                                  disabled={retryingFileId === file.id}
+                                >
+                                  {retryingFileId === file.id ? "Retrying…" : "Retry"}
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                className="btn-secondary"
+                                onClick={() => setDeleteFileTarget(file)}
+                                disabled={deletingFile && deleteFileTarget?.id === file.id}
+                              >
+                                {deletingFile && deleteFileTarget?.id === file.id ? "Deleting…" : "Delete"}
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))
@@ -808,29 +1005,210 @@ export default function App() {
                         <th>Item Code</th>
                         <th>Description</th>
                         <th>Notes</th>
+                        <th>Actions</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {projectItems.length === 0 ? (
+                      {drawingItems.length === 0 ? (
                         <tr className="matches-table__row">
-                          <td colSpan={5} style={{ textAlign: "center", color: "rgba(227,233,255,0.7)" }}>
+                          <td colSpan={6} style={{ textAlign: "center", color: "rgba(227,233,255,0.7)" }}>
                             No items extracted yet.
                           </td>
                         </tr>
                       ) : (
-                        projectItems.map((item) => (
-                          <tr key={item.id} className="matches-table__row">
-                            <td>{renderCell(item.fileNo)}</td>
-                            <td>{renderCell(item.fileName)}</td>
-                            <td>{renderCell(item.item_code)}</td>
-                            <td>{renderCell(item.description)}</td>
-                            <td>{renderCell(item.notes)}</td>
-                          </tr>
-                        ))
+                        drawingItems.map((item) => {
+                          const isEditing = editingItemId === item.id;
+                          const draft = itemDrafts[item.id];
+                          return (
+                            <tr key={item.id} className="matches-table__row">
+                              <td>{renderCell(item.fileNo)}</td>
+                              <td>{renderCell(item.fileName)}</td>
+                              <td>
+                                {isEditing ? (
+                                  <input
+                                    type="text"
+                                    value={draft?.item_code ?? ""}
+                                    onChange={(event) => handleItemDraftChange(item.id, "item_code", event.target.value)}
+                                  />
+                                ) : (
+                                  renderCell(item.item_code)
+                                )}
+                              </td>
+                              <td>
+                                {isEditing ? (
+                                  <input
+                                    type="text"
+                                    value={draft?.description ?? ""}
+                                    onChange={(event) => handleItemDraftChange(item.id, "description", event.target.value)}
+                                  />
+                                ) : (
+                                  renderCell(item.description)
+                                )}
+                              </td>
+                              <td>
+                                {isEditing ? (
+                                  <input
+                                    type="text"
+                                    value={draft?.notes ?? ""}
+                                    onChange={(event) => handleItemDraftChange(item.id, "notes", event.target.value)}
+                                  />
+                                ) : (
+                                  renderCell(item.notes)
+                                )}
+                              </td>
+                              <td>
+                                <div style={{ display: "flex", gap: "0.5rem", flexWrap: "nowrap", alignItems: "center" }}>
+                                  {isEditing ? (
+                                    <>
+                                      <button
+                                        type="button"
+                                        className="btn-secondary btn-icon"
+                                        onClick={() => void handleSaveItem(item.id)}
+                                        disabled={savingItemId === item.id}
+                                        aria-label="Save item"
+                                        title="Save"
+                                      >
+                                        {savingItemId === item.id ? (
+                                          <svg viewBox="0 0 20 20" aria-hidden="true">
+                                            <circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" strokeWidth="2" strokeDasharray="40" strokeDashoffset="16" />
+                                          </svg>
+                                        ) : (
+                                          <svg viewBox="0 0 20 20" aria-hidden="true">
+                                            <path d="M4 10l4 4 8-8" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                                          </svg>
+                                        )}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="btn-secondary btn-icon"
+                                        onClick={() => handleCancelEditItem(item.id)}
+                                        aria-label="Cancel edit"
+                                        title="Cancel"
+                                      >
+                                        <svg viewBox="0 0 20 20" aria-hidden="true">
+                                          <path d="M5 5l10 10M15 5l-10 10" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                                        </svg>
+                                      </button>
+                                    </>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      className="btn-secondary btn-icon"
+                                      onClick={() => handleEditItem(item)}
+                                      aria-label="Edit item"
+                                      title="Edit"
+                                    >
+                                      <svg viewBox="0 0 20 20" aria-hidden="true">
+                                        <path d="M4 13.5V16h2.5L15 7.5 12.5 5 4 13.5z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+                                        <path d="M11.5 6l2.5 2.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                                      </svg>
+                                    </button>
+                                  )}
+                                  <button
+                                    type="button"
+                                    className="btn-secondary btn-icon"
+                                    onClick={() => setDeleteItemTarget(item)}
+                                    disabled={deletingItemId === item.id}
+                                    aria-label="Delete item"
+                                    title="Delete"
+                                  >
+                                    {deletingItemId === item.id ? (
+                                      <svg viewBox="0 0 20 20" aria-hidden="true">
+                                        <circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" strokeWidth="2" strokeDasharray="40" strokeDashoffset="16" />
+                                      </svg>
+                                    ) : (
+                                      <svg viewBox="0 0 20 20" aria-hidden="true">
+                                        <path d="M6 6h8l-1 10H7L6 6z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+                                        <path d="M4 6h12M8 6V4h4v2" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                                      </svg>
+                                    )}
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })
                       )}
                     </tbody>
                   </table>
                 </div>
+              </div>
+
+              <div style={{ marginTop: "1.5rem" }}>
+                <h3 style={{ marginTop: 0 }}>BOQ Items</h3>
+                {boqItems.length === 0 ? (
+                  <div className="status" style={{ padding: "0.75rem", background: "rgba(255,255,255,0.04)" }}>
+                    No BOQ items extracted yet.
+                  </div>
+                ) : (
+                  <div>
+                    <div className="tabs">
+                      {boqTabs.map((tab) => (
+                        <button
+                          key={tab.id}
+                          type="button"
+                          className={`tab ${activeBoqTabId === tab.id ? "is-active" : ""}`}
+                          onClick={() => setActiveBoqTab(tab.id)}
+                        >
+                          {tab.label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="table-wrapper items-table-scroll">
+                      <table className="matches-table boq-table">
+                        <thead>
+                          <tr>
+                            {boqColumns.map((col) => (
+                              <th key={col}>{col}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filteredBoqItems.length === 0 ? (
+                            <tr className="matches-table__row">
+                              <td colSpan={boqColumns.length} style={{ textAlign: "center", color: "rgba(227,233,255,0.7)" }}>
+                                No items for this sheet.
+                              </td>
+                            </tr>
+                          ) : (() => {
+                            const rows: JSX.Element[] = [];
+                            let lastCategory = "";
+                            let lastSubcategory = "";
+                            filteredBoqItems.forEach((item) => {
+                              const category = item.metadata?.category || "Uncategorized";
+                              const subcategory = item.metadata?.subcategory || "";
+                              if (category !== lastCategory) {
+                                rows.push(
+                                  <tr key={`cat-${category}-${item.id}`} className="boq-group-row">
+                                    <td colSpan={boqColumns.length}>{category}</td>
+                                  </tr>
+                                );
+                                lastCategory = category;
+                                lastSubcategory = "";
+                              }
+                              if (subcategory && subcategory !== lastSubcategory) {
+                                rows.push(
+                                  <tr key={`sub-${category}-${subcategory}-${item.id}`} className="boq-subgroup-row">
+                                    <td colSpan={boqColumns.length}>{subcategory}</td>
+                                  </tr>
+                                );
+                                lastSubcategory = subcategory;
+                              }
+                              rows.push(
+                                <tr key={item.id} className="matches-table__row">
+                                  {boqColumns.map((col) => (
+                                    <td key={`${item.id}-${col}`}>{renderCell(getBoqCellValue(item, col))}</td>
+                                  ))}
+                                </tr>
+                              );
+                            });
+                            return rows;
+                          })()}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div style={{ marginTop: "1.5rem" }}>
@@ -943,22 +1321,75 @@ export default function App() {
                       setFeedback("Please select files to add.");
                       return;
                     }
+                    setPageLoadingMessage("Uploading files…");
                     try {
                       const uploaded = await uploadProjectFiles(activeProject.id, addDrawings, addBoq);
-                      const drawingIds = uploaded.files
-                        .filter((file) => file.fileType === "drawing")
-                        .map((file) => file.id);
-                      await startProjectExtraction(activeProject.id, uuidv4(), drawingIds);
+                      const uploadedIds = uploaded.files.map((file) => file.id);
+                      await startProjectExtraction(activeProject.id, uuidv4(), uploadedIds);
                       setAddDrawings([]);
                       setAddBoq(null);
                       setAddFilesOpen(false);
                       await refreshProjectData(activeProject.id);
                     } catch (error) {
                       setFeedback((error as Error).message || "Failed to upload additional files.");
+                    } finally {
+                      setPageLoadingMessage(null);
                     }
                   }}
                 >
                   Upload & Extract
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {deleteFileTarget && (
+          <div className="modal-backdrop" role="presentation">
+            <div className="modal" role="dialog" aria-modal="true" aria-labelledby="delete-file-title">
+              <div className="modal__header">
+                <h3 className="modal__title" id="delete-file-title">Delete File</h3>
+                <button type="button" className="modal__close" onClick={() => setDeleteFileTarget(null)}>
+                  ×
+                </button>
+              </div>
+              <div className="modal__body">
+                <p>Are you sure you want to delete “{deleteFileTarget.fileName}”?</p>
+                <p className="dashboard-muted">This will remove the file and its extracted items.</p>
+              </div>
+              <div className="modal__footer">
+                <button type="button" className="btn-secondary" onClick={() => setDeleteFileTarget(null)} disabled={deletingFile}>
+                  Cancel
+                </button>
+                <button type="button" className="btn-match" onClick={() => void handleDeleteFile()} disabled={deletingFile}>
+                  {deletingFile ? "Deleting…" : "Delete File"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {deleteItemTarget && (
+          <div className="modal-backdrop" role="presentation">
+            <div className="modal" role="dialog" aria-modal="true" aria-labelledby="delete-item-title">
+              <div className="modal__header">
+                <h3 className="modal__title" id="delete-item-title">Delete Item</h3>
+                <button type="button" className="modal__close" onClick={() => setDeleteItemTarget(null)}>
+                  ×
+                </button>
+              </div>
+              <div className="modal__body">
+                <p>Are you sure you want to delete this item?</p>
+                <p className="dashboard-muted">
+                  {deleteItemTarget.item_code || "Item"} • {deleteItemTarget.description || "No description"}
+                </p>
+              </div>
+              <div className="modal__footer">
+                <button type="button" className="btn-secondary" onClick={() => setDeleteItemTarget(null)} disabled={deletingItemId === deleteItemTarget.id}>
+                  Cancel
+                </button>
+                <button type="button" className="btn-match" onClick={() => void handleDeleteItem()} disabled={deletingItemId === deleteItemTarget.id}>
+                  {deletingItemId === deleteItemTarget.id ? "Deleting…" : "Delete Item"}
                 </button>
               </div>
             </div>

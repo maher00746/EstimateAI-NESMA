@@ -74,3 +74,18 @@ export async function updateProjectFileStatus(
     { new: true }
   ).exec();
 }
+
+export async function removeProjectFile(
+  userId: string,
+  projectId: string,
+  fileId: string
+): Promise<ProjectFileDocument | null> {
+  if (
+    !Types.ObjectId.isValid(userId) ||
+    !Types.ObjectId.isValid(projectId) ||
+    !Types.ObjectId.isValid(fileId)
+  ) {
+    return null;
+  }
+  return ProjectFileModel.findOneAndDelete({ _id: fileId, userId, projectId }).exec();
+}

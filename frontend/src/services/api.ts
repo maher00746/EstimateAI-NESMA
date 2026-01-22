@@ -427,6 +427,13 @@ export async function listProjectFiles(projectId: string): Promise<ProjectFile[]
   return safeFetch(`${API_BASE}/api/projects/${encodeURIComponent(projectId)}/files`);
 }
 
+export async function removeProjectFile(projectId: string, fileId: string): Promise<void> {
+  await safeFetch(
+    `${API_BASE}/api/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(fileId)}`,
+    { method: "DELETE" }
+  );
+}
+
 export async function listProjectItems(projectId: string): Promise<ProjectItem[]> {
   return safeFetch(`${API_BASE}/api/projects/${encodeURIComponent(projectId)}/items`);
 }

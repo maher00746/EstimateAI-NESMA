@@ -4,6 +4,7 @@ import { ProjectItemModel } from "../../modules/storage/projectItemModel";
 import { ProjectModel } from "../../modules/storage/projectModel";
 import { createProjectLog } from "../../modules/storage/projectLogRepository";
 import { extractCadBoqItemsWithGemini } from "../gemini/cadExtraction";
+import { extractBoqItemsFromExcel } from "../boq/boqExcelExtraction";
 
 const POLL_INTERVAL_MS = 2000;
 const MAX_CONCURRENCY = 12;
@@ -14,8 +15,8 @@ async function claimNextJob() {
     { status: "queued" },
     {
       status: "processing",
-      stage: "gemini",
-      message: "Extracting with Gemini…",
+      stage: "processing",
+      message: "Starting extraction…",
       startedAt: new Date(),
     },
     { new: true, sort: { createdAt: 1 } }
@@ -69,39 +70,94 @@ async function processJob(jobId: string): Promise<void> {
     });
     await ProjectFileModel.updateOne({ _id: file._id }, { status: "processing" }).exec();
 
-    await createProjectLog({
-      userId: String(job.userId),
-      projectId: String(job.projectId),
-      fileId: String(job.fileId),
-      message: `Calling Gemini API for ${file.originalName}.`,
-    });
-    const result = await extractCadBoqItemsWithGemini({
-      filePath: file.storedPath,
-      fileName: file.originalName,
-    });
-    await createProjectLog({
-      userId: String(job.userId),
-      projectId: String(job.projectId),
-      fileId: String(job.fileId),
-      message: `Gemini response received for ${file.originalName}.`,
-    });
+    let items:
+      | Array<{
+          userId: typeof job.userId;
+          projectId: typeof job.projectId;
+          fileId: typeof job.fileId;
+          source: "cad" | "boq";
+          item_code: string;
+          description: string;
+          notes: string;
+          box: { left: number; top: number; right: number; bottom: number } | null;
+          metadata?: {
+            sheetName?: string;
+            category?: string;
+            subcategory?: string;
+            rowIndex?: number;
+            fields?: Record<string, string>;
+          } | null;
+        }>
+      | [];
 
-    await ProjectItemModel.deleteMany({
-      projectId: job.projectId,
-      fileId: job.fileId,
-      source: "cad",
-    }).exec();
+    if (file.fileType === "boq") {
+      await createProjectLog({
+        userId: String(job.userId),
+        projectId: String(job.projectId),
+        fileId: String(job.fileId),
+        message: `Extracting BOQ items from ${file.originalName}.`,
+      });
+      const result = extractBoqItemsFromExcel({
+        filePath: file.storedPath,
+        fileName: file.originalName,
+      });
+      await createProjectLog({
+        userId: String(job.userId),
+        projectId: String(job.projectId),
+        fileId: String(job.fileId),
+        message: `BOQ extraction completed for ${file.originalName}.`,
+      });
+      await ProjectItemModel.deleteMany({
+        projectId: job.projectId,
+        fileId: job.fileId,
+        source: "boq",
+      }).exec();
+      items = (result.items || []).map((item) => ({
+        userId: job.userId,
+        projectId: job.projectId,
+        fileId: job.fileId,
+        source: "boq" as const,
+        item_code: item.item_code || "ITEM",
+        description: item.description || "N/A",
+        notes: item.notes || "N/A",
+        box: null,
+        metadata: item.metadata ?? null,
+      }));
+    } else {
+      await createProjectLog({
+        userId: String(job.userId),
+        projectId: String(job.projectId),
+        fileId: String(job.fileId),
+        message: `Calling Gemini API for ${file.originalName}.`,
+      });
+      const result = await extractCadBoqItemsWithGemini({
+        filePath: file.storedPath,
+        fileName: file.originalName,
+      });
+      await createProjectLog({
+        userId: String(job.userId),
+        projectId: String(job.projectId),
+        fileId: String(job.fileId),
+        message: `Gemini response received for ${file.originalName}.`,
+      });
 
-    const items = (result.items || []).map((item) => ({
-      userId: job.userId,
-      projectId: job.projectId,
-      fileId: job.fileId,
-      source: "cad" as const,
-      item_code: item.item_code || "NOTE",
-      description: item.description || "N/A",
-      notes: item.notes || "N/A",
-      box: item.box ?? null,
-    }));
+      await ProjectItemModel.deleteMany({
+        projectId: job.projectId,
+        fileId: job.fileId,
+        source: "cad",
+      }).exec();
+
+      items = (result.items || []).map((item) => ({
+        userId: job.userId,
+        projectId: job.projectId,
+        fileId: job.fileId,
+        source: "cad" as const,
+        item_code: item.item_code || "NOTE",
+        description: item.description || "N/A",
+        notes: item.notes || "N/A",
+        box: item.box ?? null,
+      }));
+    }
 
     if (items.length > 0) {
       await ProjectItemModel.insertMany(items);

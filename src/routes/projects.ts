@@ -1,5 +1,6 @@
 import { Router } from "express";
 import type { Express, Request, Response, NextFunction } from "express";
+import fs from "fs/promises";
 import multer from "multer";
 import path from "path";
 import { randomUUID } from "crypto";
@@ -16,6 +17,7 @@ import {
   createProjectFiles,
   findProjectFileById,
   listProjectFiles,
+  removeProjectFile,
   updateProjectFileStatus,
 } from "../modules/storage/projectFileRepository";
 import {
@@ -263,21 +265,23 @@ router.post(
 
       const idempotencyKey = String(req.get("Idempotency-Key") || randomUUID());
       const files = await listProjectFiles(userId, projectId);
-      const requestedFileIds = Array.isArray(req.body?.fileIds)
-        ? req.body.fileIds.map((id: unknown) => String(id))
+      const requestBody = req.body ?? {};
+      const hasFileIds = Object.prototype.hasOwnProperty.call(requestBody, "fileIds");
+      const requestedFileIds = Array.isArray(requestBody.fileIds)
+        ? requestBody.fileIds.map((id: unknown) => String(id))
         : [];
-      const drawingFiles = files.filter((file) => {
-        if (file.fileType !== "drawing") return false;
-        if (requestedFileIds.length === 0) return true;
+      const targetFiles = files.filter((file) => {
+        if (file.fileType !== "drawing" && file.fileType !== "boq") return false;
+        if (!hasFileIds && requestedFileIds.length === 0) return true;
         return requestedFileIds.includes(String(file._id));
       });
 
-      if (drawingFiles.length === 0) {
+      if (targetFiles.length === 0) {
         return res.status(200).json({ jobs: [] });
       }
 
       const jobs = await Promise.all(
-        drawingFiles.map(async (file) => {
+        targetFiles.map(async (file) => {
           const job = await upsertProjectExtractJob({
             userId,
             projectId,
@@ -307,7 +311,7 @@ router.post(
       await createProjectLog({
         userId,
         projectId,
-        message: `Extraction started for ${drawingFiles.length} drawing file(s).`,
+        message: `Extraction started for ${targetFiles.length} file(s).`,
       });
 
       res.status(200).json({ jobs });
@@ -327,8 +331,8 @@ router.post(
       if (!file) {
         return res.status(404).json({ message: "File not found" });
       }
-      if (file.fileType !== "drawing") {
-        return res.status(400).json({ message: "Only drawing files can be retried" });
+      if (file.fileType !== "drawing" && file.fileType !== "boq") {
+        return res.status(400).json({ message: "Only drawing or BOQ files can be retried" });
       }
       if (file.status !== "failed") {
         return res.status(400).json({ message: "File is not in failed state" });
@@ -391,6 +395,39 @@ router.get("/:projectId/files", async (req: AuthRequest, res: Response, next: Ne
   }
 });
 
+router.delete(
+  "/:projectId/files/:fileId",
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const userId = getUserId(req);
+      const { projectId, fileId } = req.params;
+      const project = await findProjectById(userId, projectId);
+      if (!project) {
+        return res.status(404).json({ message: "Project not found" });
+      }
+      const file = await findProjectFileById(userId, projectId, fileId);
+      if (!file) {
+        return res.status(404).json({ message: "File not found" });
+      }
+
+      await Promise.all([
+        ProjectExtractJobModel.deleteMany({ userId, projectId, fileId }).exec(),
+        ProjectItemModel.deleteMany({ userId, projectId, fileId }).exec(),
+        ProjectLogModel.deleteMany({ userId, projectId, fileId }).exec(),
+        removeProjectFile(userId, projectId, fileId),
+      ]);
+
+      if (file.storedPath) {
+        await fs.rm(file.storedPath, { force: true });
+      }
+
+      res.status(204).send();
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
 router.get(
   "/:projectId/stream",
   async (req: AuthRequest, res: Response, next: NextFunction) => {
@@ -443,6 +480,7 @@ router.get(
               description: item.description,
               notes: item.notes,
               box: item.box ?? null,
+              metadata: item.metadata ?? null,
               createdAt: item.createdAt,
               updatedAt: item.updatedAt,
             };
@@ -529,6 +567,7 @@ router.get("/:projectId/items", async (req: AuthRequest, res: Response, next: Ne
           description: item.description,
           notes: item.notes,
           box: item.box ?? null,
+          metadata: item.metadata ?? null,
           createdAt: item.createdAt,
           updatedAt: item.updatedAt,
         };
@@ -559,6 +598,7 @@ router.get(
           description: item.description,
           notes: item.notes,
           box: item.box ?? null,
+          metadata: item.metadata ?? null,
           createdAt: item.createdAt,
           updatedAt: item.updatedAt,
         }))

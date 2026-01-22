@@ -25,11 +25,18 @@ export async function createProjectItem(params: {
   userId: string;
   projectId: string;
   fileId: string;
-  source: "cad" | "manual";
+  source: "cad" | "manual" | "boq";
   item_code: string;
   description: string;
   notes: string;
   box?: { left: number; top: number; right: number; bottom: number } | null;
+  metadata?: {
+    sheetName?: string;
+    category?: string;
+    subcategory?: string;
+    rowIndex?: number;
+    fields?: Record<string, string>;
+  } | null;
 }): Promise<ProjectItemDocument> {
   if (
     !Types.ObjectId.isValid(params.userId) ||
@@ -47,6 +54,7 @@ export async function createProjectItem(params: {
     description: params.description,
     notes: params.notes,
     box: params.box ?? null,
+    metadata: params.metadata ?? null,
   });
   return doc.save();
 }
