@@ -11,6 +11,16 @@ export interface ProjectFileDocument extends mongoose.Document {
   storedName: string;
   fileType: ProjectFileType;
   status: ProjectFileStatus;
+  boqSheetStatus?: Array<{
+    sheetName: string;
+    status: ProjectFileStatus;
+    error?: string;
+    parts?: Array<{
+      index: number;
+      status: ProjectFileStatus;
+      error?: string;
+    }>;
+  }> | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -24,6 +34,7 @@ const ProjectFileSchema = new Schema<ProjectFileDocument>(
     storedName: { type: String, required: true },
     fileType: { type: String, required: true, index: true },
     status: { type: String, required: true, index: true },
+    boqSheetStatus: { type: Schema.Types.Mixed, default: null },
   },
   { timestamps: true }
 );

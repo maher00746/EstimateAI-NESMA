@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
 import CadExtraction from "./pages/CadExtraction";
@@ -566,7 +567,7 @@ export default function App() {
       return aIndex - bIndex;
     });
   }, [activeBoqTabId, boqItems]);
-  const boqColumns = useMemo(() => ["Item", "Description", "QTY", "Unit"], []);
+  const boqColumns = useMemo(() => ["Item", "Description", "QTY", "Unit", "Rate", "Amount"], []);
   const getBoqCellValue = (item: ProjectItem, column: string) => {
     const key = normalizeColumn(column);
     const fields = item.metadata?.fields ?? {};
@@ -576,6 +577,8 @@ export default function App() {
     if (key === "description") return item.description;
     if (key === "qty") return findField(["qty", "quantity", "q'ty", "qnty"]) ?? "—";
     if (key === "unit") return findField(["unit", "uom", "unit of measure"]) ?? "—";
+    if (key === "rate") return findField(["rate", "unit rate", "unit price", "price"]) ?? "—";
+    if (key === "amount") return findField(["amount", "total", "total price"]) ?? "—";
     return "—";
   };
 
@@ -967,7 +970,7 @@ export default function App() {
                               ) : (
                                 <span className="status">BOQ</span>
                               )}
-                              {file.fileType === "drawing" && file.status === "failed" && (
+                              {file.status === "failed" && (
                                 <button
                                   type="button"
                                   className="btn-secondary"
@@ -1171,7 +1174,7 @@ export default function App() {
                               </td>
                             </tr>
                           ) : (() => {
-                            const rows: JSX.Element[] = [];
+                            const rows: ReactNode[] = [];
                             let lastCategory = "";
                             let lastSubcategory = "";
                             filteredBoqItems.forEach((item) => {
@@ -1194,8 +1197,14 @@ export default function App() {
                                 );
                                 lastSubcategory = subcategory;
                               }
+                              const itemCode = (item.item_code ?? "").trim();
+                              const highlightItemCode = /^[A-Z]$/.test(itemCode);
                               rows.push(
-                                <tr key={item.id} className="matches-table__row">
+                                <tr
+                                  key={item.id}
+                                  className="matches-table__row"
+                                  style={highlightItemCode ? { color: "#72fcd1" } : undefined}
+                                >
                                   {boqColumns.map((col) => (
                                     <td key={`${item.id}-${col}`}>{renderCell(getBoqCellValue(item, col))}</td>
                                   ))}

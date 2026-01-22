@@ -1,5 +1,7 @@
 import path from "path";
 import xlsx from "xlsx";
+import { config } from "../../config";
+import { getOpenAiClient } from "../openai/client";
 
 export type BoqExtractionItem = {
   item_code: string;
@@ -10,324 +12,341 @@ export type BoqExtractionItem = {
     category?: string;
     subcategory?: string;
     rowIndex: number;
+    chunkIndex?: number;
+    chunkCount?: number;
     fields: Record<string, string>;
   };
 };
 
-const EXCEL_EXTENSIONS = new Set([".xlsx", ".xls", ".csv"]);
-const HEADER_KEYWORDS = [
-  "item",
-  "item no",
-  "item number",
-  "item code",
-  "code",
-  "description",
-  "desc",
-  "unit",
-  "uom",
-  "qty",
-  "quantity",
-  "rate",
-  "price",
-  "unit price",
-  "amount",
-  "total",
-  "remarks",
-  "remark",
-  "notes",
-  "note",
-  "category",
-  "subcategory",
-  "section",
-  "division",
-];
-
-const ITEM_CODE_HEADERS = ["item no", "item number", "item code", "code", "no", "item"];
-const DESCRIPTION_HEADERS = ["description", "desc", "item", "name", "scope", "material"];
-const NOTES_HEADERS = ["remarks", "remark", "notes", "note", "spec", "specification"];
-const QTY_HEADERS = ["qty", "quantity", "q'ty", "qnty"];
-const UNIT_HEADERS = ["unit", "uom", "unit of measure"];
-const CATEGORY_HEADERS = ["category", "section", "division"];
-const SUBCATEGORY_HEADERS = ["subcategory", "sub-category", "sub section", "subsection", "sub division"];
-const COMMON_UNITS = new Set([
-  "m",
-  "m2",
-  "m3",
-  "mm",
-  "cm",
-  "km",
-  "ft",
-  "in",
-  "kg",
-  "ton",
-  "t",
-  "nos",
-  "no",
-  "pc",
-  "pcs",
-  "ea",
-  "each",
-  "set",
-  "lot",
-  "l",
-  "ls",
-  "hr",
-  "day",
-]);
-
-function normalizeHeader(value: string): string {
-  return value.trim().toLowerCase().replace(/\s+/g, " ");
-}
-
-function coerceString(val: unknown): string {
-  if (val === undefined || val === null) return "";
-  if (typeof val === "number") return Number.isFinite(val) ? String(val) : "";
-  return String(val).trim();
-}
-
-function detectHeaderRow(rows: Array<Array<string>>): number {
-  let bestIdx = -1;
-  let bestScore = 0;
-  const scanLimit = Math.min(rows.length, 40);
-  for (let i = 0; i < scanLimit; i += 1) {
-    const row = rows[i];
-    if (!row || row.length === 0) continue;
-    const normalized = row.map((cell) => normalizeHeader(coerceString(cell)));
-    const nonEmpty = normalized.filter(Boolean).length;
-    if (nonEmpty < 2) continue;
-    const keywordMatches = normalized.filter((cell) => HEADER_KEYWORDS.includes(cell)).length;
-    const score = keywordMatches * 2 + Math.min(nonEmpty, 6);
-    if (score > bestScore) {
-      bestScore = score;
-      bestIdx = i;
-    }
-  }
-  return bestIdx;
-}
-
-function buildHeaders(row: Array<string>): string[] {
-  const headers: string[] = [];
-  for (let i = 0; i < row.length; i += 1) {
-    const raw = coerceString(row[i]);
-    headers.push(raw || `Column ${i + 1}`);
-  }
-  return headers;
-}
-
-function pickColumnIndex(headers: string[], candidates: string[]): number {
-  const normalized = headers.map((h) => normalizeHeader(h));
-  return normalized.findIndex((h) => candidates.includes(h));
-}
-
-function isNumeric(value: string): boolean {
-  if (!value) return false;
-  const cleaned = value.replace(/[, ]+/g, "").trim();
-  return /^-?\d+(\.\d+)?$/.test(cleaned);
-}
-
-function normalizeUnit(value: string): string {
-  return normalizeHeader(value)
-    .replace(/\u00b2/g, "2")
-    .replace(/\u00b3/g, "3")
-    .replace(/\s+/g, "")
-    .replace(/\./g, "");
-}
-
-function isPlausibleUnit(value: string): boolean {
-  if (!value) return false;
-  const unit = normalizeUnit(value);
-  return COMMON_UNITS.has(unit);
-}
-
-type ColumnStats = {
-  nonEmpty: number;
-  numeric: number;
-  unit: number;
+type BoqSheetItem = {
+  item_key: string;
+  description: string;
+  notes: string;
+  quantity: string;
+  unit: string;
+  rate: string;
+  amount: string;
+  category: string;
+  subcategory: string;
+  rowIndex: number;
 };
 
-function computeColumnStats(rows: Array<Array<string>>, startRow: number, colCount: number): ColumnStats[] {
-  const stats: ColumnStats[] = Array.from({ length: colCount }, () => ({
-    nonEmpty: 0,
-    numeric: 0,
-    unit: 0,
-  }));
-  const scanLimit = Math.min(rows.length, startRow + 200);
-  for (let r = startRow; r < scanLimit; r += 1) {
-    const row = rows[r] || [];
-    for (let c = 0; c < colCount; c += 1) {
-      const value = coerceString(row[c]);
-      if (!value) continue;
-      stats[c].nonEmpty += 1;
-      if (isNumeric(value)) stats[c].numeric += 1;
-      if (isPlausibleUnit(value)) stats[c].unit += 1;
+const EXCEL_EXTENSIONS = new Set([".xlsx", ".xls", ".csv"]);
+
+const BOQ_SHEET_PROMPT = `You are a Senior Quantity Surveyor. You will receive rows from a BOQ Excel sheet.
+
+Task:
+- Identify ONLY BOQ item rows.
+- Track categories as they appear in the sheet, then attach them to subsequent items.
+- Include the rows that are notes/instructions/details that relate to an item or a group of items. The rows are in order, so return the row that contains any details or instructions as it is, as a separate row,
+- Ignore ONLY irrelevant rows (e.g., headers with column titles or unrelated noise).
+- Do NOT invent, reformat, or calculate anything.
+- Preserve the exact text from the cells (including punctuation and spacing).
+- Output JSON ONLY that matches the schema.
+
+Rules:
+1) Input rows are in order. Keep the output in the same order (ascending rowIndex).
+2) A category row is usually a text-only row. Use its exact text as category.
+3) A BOQ item row contains an item key (e.g., A, B, C ..) and a description. It may also include quantity, unit, rate, and amount.
+4) If a field is missing in the row, return an empty string for that field.
+5) Do NOT include category-only or subcategory-only rows in the output; they only set context for the following items.
+
+Return only a JSON object with this shape:
+{
+  "items": [
+    {
+      "item_key": "",
+      "description": "",
+      "notes": "",
+      "quantity": "",
+      "unit": "",
+      "rate": "",
+      "amount": "",
+      "category": "",
+      "rowIndex": 0
     }
-  }
-  return stats;
+  ]
+}`;
+
+const BOQ_SHEET_SCHEMA = {
+  type: "array",
+  items: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      item_key: { type: "string" },
+      description: { type: "string" },
+      notes: { type: "string" },
+      quantity: { type: "string" },
+      unit: { type: "string" },
+      rate: { type: "string" },
+      amount: { type: "string" },
+      category: { type: "string" },
+      subcategory: { type: "string" },
+      rowIndex: { type: "number" },
+    },
+    required: ["item_key", "description", "notes", "quantity", "unit", "rate", "amount", "category", "subcategory", "rowIndex"],
+  },
+};
+
+function coerceCell(val: unknown): string {
+  if (val === undefined || val === null) return "";
+  if (typeof val === "number") return Number.isFinite(val) ? String(val) : "";
+  return String(val);
 }
 
-export function extractBoqItemsFromExcel(params: {
+function trimTrailingEmptyCells(cells: string[]): string[] {
+  let lastIdx = cells.length - 1;
+  while (lastIdx >= 0 && String(cells[lastIdx] ?? "").trim() === "") {
+    lastIdx -= 1;
+  }
+  return cells.slice(0, lastIdx + 1);
+}
+
+function normalizeRows(rows: Array<Array<unknown>>): Array<{ rowIndex: number; cells: string[] }> {
+  return rows
+    .map((row, idx) => {
+      const cells = Array.from({ length: row?.length ?? 0 }, (_, col) => coerceCell(row?.[col]));
+      return { rowIndex: idx, cells: trimTrailingEmptyCells(cells) };
+    })
+    .filter((entry) => entry.cells.some((cell) => String(cell).trim() !== ""));
+}
+
+function stripEmptyColumns(rows: Array<{ rowIndex: number; cells: string[] }>): Array<{ rowIndex: number; cells: string[] }> {
+  const maxCols = rows.reduce((max, row) => Math.max(max, row.cells.length), 0);
+  if (maxCols === 0) return rows;
+  const nonEmptyCols = new Array<boolean>(maxCols).fill(false);
+  rows.forEach((row) => {
+    row.cells.forEach((cell, colIdx) => {
+      if (String(cell).trim() !== "") {
+        nonEmptyCols[colIdx] = true;
+      }
+    });
+  });
+  const keepIndices = nonEmptyCols
+    .map((keep, idx) => (keep ? idx : -1))
+    .filter((idx) => idx >= 0);
+  if (keepIndices.length === maxCols) return rows;
+  return rows.map((row) => ({
+    rowIndex: row.rowIndex,
+    cells: keepIndices.map((idx) => row.cells[idx] ?? ""),
+  }));
+}
+
+function isRowEmpty(row: Array<unknown>): boolean {
+  return row.every((cell) => String(coerceCell(cell)).trim() === "");
+}
+
+function splitRowsByEmptyRows(
+  rows: Array<Array<unknown>>,
+  maxRowsPerChunk: number
+): Array<Array<Array<unknown>>> {
+  if (rows.length === 0) return [];
+  const chunks: Array<Array<Array<unknown>>> = [];
+  let startIdx = 0;
+  let lastEmptyIdx = -1;
+  let i = 0;
+
+  while (i < rows.length) {
+    if (isRowEmpty(rows[i])) {
+      lastEmptyIdx = i;
+    }
+
+    const currentSize = i - startIdx + 1;
+    if (currentSize >= maxRowsPerChunk && lastEmptyIdx >= startIdx) {
+      chunks.push(rows.slice(startIdx, lastEmptyIdx));
+      startIdx = lastEmptyIdx + 1;
+      lastEmptyIdx = -1;
+      i = startIdx;
+      continue;
+    }
+
+    i += 1;
+  }
+
+  if (startIdx < rows.length) {
+    chunks.push(rows.slice(startIdx));
+  }
+
+  return chunks;
+}
+
+async function extractSheetWithOpenAi(params: {
+  sheetName: string;
+  rows: Array<{ rowIndex: number; cells: string[] }>;
+}): Promise<{ items: BoqSheetItem[]; rawText: string }> {
+  if (!config.openAiKey) {
+    throw new Error("OPENAI_API_KEY is not set");
+  }
+
+  const client = getOpenAiClient();
+  const payloadText = JSON.stringify({ sheetName: params.sheetName, rows: params.rows });
+  const prompt = `${BOQ_SHEET_PROMPT}\n\nSheet data (JSON):\n${payloadText}`;
+
+  let response: unknown;
+  try {
+    response = await client.chat.completions.create({
+      model: config.openAiModel,
+      messages: [
+        { role: "system", content: "Return only JSON and follow the specified schema." },
+        { role: "user", content: prompt },
+      ],
+      temperature: 0,
+      max_completion_tokens: 20000,
+      response_format: { type: "json_object" },
+    });
+  } catch (error) {
+    const err = error as Error & { cause?: unknown };
+    console.error("[OpenAI BOQ] generateContent failed", {
+      message: err.message,
+      cause: err.cause,
+      model: config.openAiModel,
+    });
+    throw error;
+  }
+
+  const text = String((response as any)?.choices?.[0]?.message?.content ?? "").trim();
+  if (!text) {
+    return { items: [], rawText: "" };
+  }
+
+  let parsed: BoqSheetItem[] = [];
+  try {
+    const maybe = JSON.parse(text);
+    if (Array.isArray(maybe)) {
+      parsed = maybe as BoqSheetItem[];
+    } else if (Array.isArray((maybe as any)?.items)) {
+      parsed = (maybe as any).items as BoqSheetItem[];
+    }
+  } catch {
+    parsed = [];
+  }
+
+  return { items: parsed, rawText: text };
+}
+
+export async function extractBoqItemsFromExcel(params: {
   filePath: string;
   fileName: string;
-}): { items: BoqExtractionItem[]; rawContent: string } {
+  sheetNames?: string[];
+  retryParts?: Record<string, number[]>;
+  onSheetStage?: (info: {
+    sheetName: string;
+    stage: "calling" | "received" | "failed";
+    itemCount?: number;
+    errorMessage?: string;
+    chunkIndex?: number;
+    chunkCount?: number;
+  }) => void | Promise<void>;
+  onSheetResult?: (info: {
+    sheetName: string;
+    items: BoqSheetItem[];
+    chunkIndex?: number;
+    chunkCount?: number;
+  }) => void | Promise<void>;
+}): Promise<{ items: BoqExtractionItem[]; rawContent: string; sheetNames: string[] }> {
   const ext = path.extname(params.fileName).toLowerCase();
   if (!EXCEL_EXTENSIONS.has(ext)) {
     throw new Error("Unsupported BOQ file type. Please upload an Excel or CSV file.");
   }
 
   const workbook = xlsx.readFile(params.filePath, { cellDates: false, raw: false });
+  const targetSheets = Array.isArray(params.sheetNames) && params.sheetNames.length > 0
+    ? workbook.SheetNames.filter((name) => params.sheetNames?.includes(name))
+    : workbook.SheetNames;
+
+  const MAX_ROWS_PER_CHUNK = 350;
+  const sheetResults = await Promise.all(
+    targetSheets.map(async (sheetName) => {
+      const sheet = workbook.Sheets[sheetName];
+      if (!sheet) {
+        return { sheetName, items: [] as BoqSheetItem[], rawText: "" };
+      }
+      const rows = xlsx.utils.sheet_to_json<Array<unknown>>(sheet, {
+        header: 1,
+        defval: "",
+        raw: false,
+        blankrows: true,
+      });
+      if (!rows.length) {
+        return { sheetName, items: [] as BoqSheetItem[], rawText: "" };
+      }
+
+      const chunks = rows.length > MAX_ROWS_PER_CHUNK ? splitRowsByEmptyRows(rows, MAX_ROWS_PER_CHUNK) : [rows];
+      const chunkCount = chunks.length;
+      const retryChunkIndices = params.retryParts?.[sheetName];
+      const chunkTasks = chunks.map((chunkRows, chunkIndex) => ({ chunkRows, chunkIndex }))
+        .filter((chunk) => {
+          if (!retryChunkIndices) return true;
+          if (retryChunkIndices.length === 0) return true;
+          return retryChunkIndices.includes(chunk.chunkIndex);
+        });
+
+      const chunkPromises = chunkTasks.map(async ({ chunkRows, chunkIndex }) => {
+        const normalized = stripEmptyColumns(normalizeRows(chunkRows));
+        await params.onSheetStage?.({ sheetName, stage: "calling", chunkIndex, chunkCount });
+        try {
+          const extracted = await extractSheetWithOpenAi({ sheetName, rows: normalized });
+          await params.onSheetStage?.({
+            sheetName,
+            stage: "received",
+            itemCount: extracted.items?.length ?? 0,
+            chunkIndex,
+            chunkCount,
+          });
+          await params.onSheetResult?.({
+            sheetName,
+            items: extracted.items ?? [],
+            chunkIndex,
+            chunkCount,
+          });
+          return { partIndex: chunkIndex, ...extracted };
+        } catch (error) {
+          await params.onSheetStage?.({
+            sheetName,
+            stage: "failed",
+            errorMessage: error instanceof Error ? error.message : String(error),
+            chunkIndex,
+            chunkCount,
+          });
+          return { partIndex: chunkIndex, items: [] as BoqSheetItem[], rawText: "" };
+        }
+      });
+
+      const chunkResults = await Promise.all(chunkPromises);
+      const orderedChunks = [...chunkResults].sort((a, b) => a.partIndex - b.partIndex);
+      const mergedItems = orderedChunks.flatMap((result) => result.items ?? []);
+      const mergedRaw = orderedChunks.map((result) => result.rawText).filter(Boolean).join("\n\n");
+      return { sheetName, items: mergedItems, rawText: mergedRaw };
+    })
+  );
   const items: BoqExtractionItem[] = [];
 
-  for (const sheetName of workbook.SheetNames) {
-    const sheet = workbook.Sheets[sheetName];
-    if (!sheet) continue;
-    const rows = xlsx.utils.sheet_to_json<Array<string>>(sheet, {
-      header: 1,
-      defval: "",
-      raw: false,
-      blankrows: false,
-    });
-    if (!rows.length) continue;
-
-    const headerRowIndex = detectHeaderRow(rows);
-    const headerRow = headerRowIndex >= 0 ? rows[headerRowIndex] : rows[0];
-    const headers = buildHeaders(headerRow);
-    const maxCols = Math.max(...rows.map((row) => row.length));
-    for (let i = headers.length; i < maxCols; i += 1) {
-      headers.push(`Column ${i + 1}`);
-    }
-    const itemCodeIdx = pickColumnIndex(headers, ITEM_CODE_HEADERS);
-    const descriptionIdx = pickColumnIndex(headers, DESCRIPTION_HEADERS);
-    const notesIdx = pickColumnIndex(headers, NOTES_HEADERS);
-    let qtyIdx = pickColumnIndex(headers, QTY_HEADERS);
-    let unitIdx = pickColumnIndex(headers, UNIT_HEADERS);
-    const categoryIdx = pickColumnIndex(headers, CATEGORY_HEADERS);
-    const subcategoryIdx = pickColumnIndex(headers, SUBCATEGORY_HEADERS);
-
-    let currentCategory = "";
-    let currentSubcategory = "";
-    const startRow = headerRowIndex >= 0 ? headerRowIndex + 1 : 1;
-    const stats = computeColumnStats(rows, startRow, headers.length);
-
-    const MIN_NON_EMPTY = 6;
-    const NUMERIC_RATIO = 0.6;
-    const UNIT_RATIO = 0.6;
-
-    const numericRatio = (idx: number) =>
-      stats[idx].nonEmpty > 0 ? stats[idx].numeric / stats[idx].nonEmpty : 0;
-    const unitRatio = (idx: number) =>
-      stats[idx].nonEmpty > 0 ? stats[idx].unit / stats[idx].nonEmpty : 0;
-
-    if (qtyIdx >= 0 && (stats[qtyIdx].nonEmpty < MIN_NON_EMPTY || numericRatio(qtyIdx) < NUMERIC_RATIO)) {
-      qtyIdx = -1;
-    }
-    if (unitIdx >= 0 && (stats[unitIdx].nonEmpty < MIN_NON_EMPTY || unitRatio(unitIdx) < UNIT_RATIO)) {
-      unitIdx = -1;
-    }
-
-    if (qtyIdx < 0) {
-      let bestIdx = -1;
-      let bestScore = 0;
-      stats.forEach((stat, idx) => {
-        if (stat.nonEmpty < MIN_NON_EMPTY) return;
-        const ratio = numericRatio(idx);
-        if (ratio >= NUMERIC_RATIO && ratio > bestScore) {
-          bestScore = ratio;
-          bestIdx = idx;
-        }
-      });
-      qtyIdx = bestIdx;
-    }
-
-    if (unitIdx < 0) {
-      let bestIdx = -1;
-      let bestScore = 0;
-      stats.forEach((stat, idx) => {
-        if (stat.nonEmpty < MIN_NON_EMPTY) return;
-        const ratio = unitRatio(idx);
-        if (ratio >= UNIT_RATIO && ratio > bestScore) {
-          bestScore = ratio;
-          bestIdx = idx;
-        }
-      });
-      unitIdx = bestIdx;
-    }
-
-    for (let rowIndex = startRow; rowIndex < rows.length; rowIndex += 1) {
-      const row = rows[rowIndex] || [];
-      const values = headers.map((_, idx) => coerceString(row[idx]));
-      const filledIndices = values
-        .map((value, idx) => (value ? idx : -1))
-        .filter((idx) => idx >= 0);
-      if (filledIndices.length === 0) continue;
-
-      const rowFields: Record<string, string> = {};
-      headers.forEach((header, idx) => {
-        const value = values[idx];
-        if (value) rowFields[header] = value;
-      });
-
-      const rowCategory = categoryIdx >= 0 ? values[categoryIdx] : "";
-      const rowSubcategory = subcategoryIdx >= 0 ? values[subcategoryIdx] : "";
-      if (rowCategory) {
-        currentCategory = rowCategory.trim();
-        currentSubcategory = "";
-      }
-      if (rowSubcategory) {
-        currentSubcategory = rowSubcategory.trim();
-      }
-
-      const itemCodeCandidate = itemCodeIdx >= 0 ? values[itemCodeIdx] : "";
-      const descriptionCandidate =
-        (descriptionIdx >= 0 ? values[descriptionIdx] : "") ||
-        rowFields[headers.find((header) => rowFields[header]) || ""] ||
-        "";
-      const quantityCandidate = qtyIdx >= 0 ? values[qtyIdx] : "";
-      const unitCandidate = unitIdx >= 0 ? values[unitIdx] : "";
-      const notes = notesIdx >= 0 ? values[notesIdx] : "";
-
-      const hasItemFields = Boolean(itemCodeCandidate || descriptionCandidate);
-      const qtyHasValue = qtyIdx >= 0 && Boolean(quantityCandidate);
-      const unitHasValue = unitIdx >= 0 && Boolean(unitCandidate);
-      const hasQty = qtyIdx >= 0 ? isNumeric(quantityCandidate) : false;
-      const hasUnit = unitIdx >= 0 ? isPlausibleUnit(unitCandidate) : false;
-
-      if (!itemCodeCandidate && !qtyHasValue && !unitHasValue) {
-        const label = values[filledIndices[0]].trim();
-        if (!label) continue;
-        if (!currentCategory || currentSubcategory) {
-          currentCategory = label;
-          currentSubcategory = "";
-        } else {
-          currentSubcategory = label;
-        }
-        continue;
-      }
-
-      if (!currentCategory && !currentSubcategory) continue;
-      if (!hasItemFields) continue;
-      if (qtyIdx >= 0 && qtyHasValue && !hasQty) continue;
-      if (unitIdx >= 0 && unitHasValue && !hasUnit) continue;
-
-      const item_code =
-        itemCodeCandidate ||
-        rowFields[headers[0]] ||
-        `ITEM-${rowIndex + 1}`;
-      const description = descriptionCandidate;
-
+  sheetResults.forEach((result) => {
+    const sheetName = result.sheetName;
+    (result.items || []).forEach((item) => {
+      const fields: Record<string, string> = {
+        qty: item.quantity || "",
+        quantity: item.quantity || "",
+        unit: item.unit || "",
+        rate: item.rate || "",
+        amount: item.amount || "",
+      };
       items.push({
-        item_code: item_code || `ITEM-${rowIndex + 1}`,
-        description: description || "N/A",
-        notes: notes || "N/A",
+        item_code: item.item_key || "ITEM",
+        description: item.description || "N/A",
+        notes: item.notes || "N/A",
         metadata: {
           sheetName,
-          category: currentCategory || undefined,
-          subcategory: currentSubcategory || undefined,
-          rowIndex,
-          fields: rowFields,
+          category: item.category || undefined,
+          subcategory: item.subcategory || undefined,
+          rowIndex: Number.isFinite(item.rowIndex) ? item.rowIndex : 0,
+          fields,
         },
       });
-    }
-  }
+    });
+  });
 
-  return { items, rawContent: "" };
+  const rawContent = sheetResults.map((result) => result.rawText).filter(Boolean).join("\n\n");
+  return { items, rawContent, sheetNames: targetSheets };
 }

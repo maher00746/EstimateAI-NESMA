@@ -21,6 +21,8 @@ export const config = {
   geminiApiKey: process.env.GEMINI_API_KEY ?? "",
   // Use gemini-3-pro-preview for best document understanding (latest as of Jan 2026)
   geminiModel: process.env.GEMINI_MODEL ?? "gemini-3-pro-preview",
+  // BOQ Excel extraction (use 2.5 Pro for accuracy)
+  geminiBoqModel: process.env.GEMINI_BOQ_MODEL ?? "gemini-2.5-pro",
   // Higher thinking budget for complex visual analysis of architectural drawings
   geminiThinkingBudget: Number(process.env.GEMINI_THINKING_BUDGET ?? 16384),
 

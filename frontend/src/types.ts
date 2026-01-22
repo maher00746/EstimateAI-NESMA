@@ -210,6 +210,16 @@ export interface ProjectFile {
   storedName: string;
   fileType: ProjectFileType;
   status: ProjectFileStatus;
+  boqSheetStatus?: Array<{
+    sheetName: string;
+    status: ProjectFileStatus;
+    error?: string;
+    parts?: Array<{
+      index: number;
+      status: ProjectFileStatus;
+      error?: string;
+    }>;
+  }> | null;
   createdAt: string;
   updatedAt: string;
 }

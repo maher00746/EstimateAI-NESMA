@@ -242,6 +242,7 @@ router.post(
           storedName: file.storedName,
           fileType: file.fileType,
           status: file.status,
+          boqSheetStatus: file.boqSheetStatus ?? null,
           createdAt: file.createdAt,
           updatedAt: file.updatedAt,
         })),
@@ -386,6 +387,7 @@ router.get("/:projectId/files", async (req: AuthRequest, res: Response, next: Ne
         storedName: file.storedName,
         fileType: file.fileType,
         status: file.status,
+        boqSheetStatus: file.boqSheetStatus ?? null,
         createdAt: file.createdAt,
         updatedAt: file.updatedAt,
       }))
@@ -465,6 +467,7 @@ router.get(
             storedName: file.storedName,
             fileType: file.fileType,
             status: file.status,
+            boqSheetStatus: file.boqSheetStatus ?? null,
             createdAt: file.createdAt,
             updatedAt: file.updatedAt,
           })),
