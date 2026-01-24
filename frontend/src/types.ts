@@ -204,6 +204,10 @@ export interface ProductivityRatesRow {
   label: string;
   quantity: string;
   hourlyRate?: string;
+  hoursPerDay?: string;
+  dailyProductivity?: string;
+  mh?: string;
+  rate?: string;
 }
 
 export interface ProductivityRatesBlock {
@@ -214,6 +218,8 @@ export interface ProductivityRatesBlock {
   dailyProductivity: string;
   manpowerRows: ProductivityRatesRow[];
   equipmentRows: ProductivityRatesRow[];
+  manpowerMh?: string;
+  manpowerRate?: string;
 }
 
 export interface ProductivityRatesPayload {

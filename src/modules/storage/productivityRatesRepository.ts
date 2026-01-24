@@ -1,9 +1,13 @@
 import { Types } from "mongoose";
-import { ProductivityRatesDocument, ProductivityRatesModel } from "./productivityRatesModel";
+import {
+  ProductivityRatesBlock,
+  ProductivityRatesDocument,
+  ProductivityRatesModel,
+} from "./productivityRatesModel";
 
 export interface ProductivityRatesPayload {
   factor: string;
-  blocks: unknown[];
+  blocks: ProductivityRatesBlock[];
 }
 
 export async function getProductivityRates(userId: string): Promise<ProductivityRatesDocument | null> {

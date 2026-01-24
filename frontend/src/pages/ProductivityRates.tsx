@@ -7,11 +7,14 @@ type ProductivityRatesProps = {
   projectName?: string;
 };
 
-const createRow = (label = ""): ProductivityRatesRow => ({
+const createRow = (label = "", overrides: Partial<ProductivityRatesRow> = {}): ProductivityRatesRow => ({
   id: uuidv4(),
   label,
   quantity: "",
   hourlyRate: "",
+  hoursPerDay: "",
+  dailyProductivity: "",
+  ...overrides,
 });
 
 const createBlock = (): ProductivityRatesBlock => ({
@@ -22,6 +25,8 @@ const createBlock = (): ProductivityRatesBlock => ({
   dailyProductivity: "",
   manpowerRows: [createRow("FLAGMAN"), createRow("UNSKILLED")],
   equipmentRows: [createRow()],
+  manpowerMh: "",
+  manpowerRate: "",
 });
 
 const parseNumber = (value: string) => {
@@ -32,6 +37,38 @@ const parseNumber = (value: string) => {
 
 const formatNumber = (value: number) => value.toFixed(2);
 
+const getPrimaryEquipmentRowId = (block: ProductivityRatesBlock) => block.equipmentRows[0]?.id;
+
+const getPrimaryEquipmentRowValues = (block: ProductivityRatesBlock) => {
+  const primaryRow = block.equipmentRows[0] ?? { hoursPerDay: "", dailyProductivity: "" };
+  return {
+    hoursPerDay: primaryRow.hoursPerDay ?? "",
+    dailyProductivity: primaryRow.dailyProductivity ?? "",
+  };
+};
+
+const normalizeBlocks = (inputBlocks: ProductivityRatesBlock[]): ProductivityRatesBlock[] =>
+  inputBlocks.map((block) => {
+    const legacyHours = block.hoursPerDay ?? "";
+    const legacyProductivity = block.dailyProductivity ?? "";
+    const applyEquipmentDefaults = (row: ProductivityRatesRow): ProductivityRatesRow => ({
+      ...row,
+      hourlyRate: row.hourlyRate ?? "",
+      hoursPerDay: row.hoursPerDay ?? legacyHours,
+      dailyProductivity: row.dailyProductivity ?? legacyProductivity,
+    });
+    return {
+      ...block,
+      hoursPerDay: block.hoursPerDay ?? "",
+      dailyProductivity: block.dailyProductivity ?? "",
+      manpowerRows: block.manpowerRows.map((row) => ({
+        ...row,
+        hourlyRate: row.hourlyRate ?? "",
+      })),
+      equipmentRows: block.equipmentRows.map(applyEquipmentDefaults),
+    };
+  });
+
 export default function ProductivityRates({ projectName }: ProductivityRatesProps) {
   const [factor, setFactor] = useState("1");
   const [blocks, setBlocks] = useState<ProductivityRatesBlock[]>([createBlock()]);
@@ -40,6 +77,9 @@ export default function ProductivityRates({ projectName }: ProductivityRatesProp
   const [saving, setSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [isDirty, setIsDirty] = useState(false);
+  const [rowOverrides, setRowOverrides] = useState<Record<string, { hoursPerDay?: boolean; dailyProductivity?: boolean }>>(
+    {}
+  );
   const lastSavedRef = useRef<string>("");
   const [confirmDelete, setConfirmDelete] = useState<
     | { type: "block"; blockId: string }
@@ -57,14 +97,16 @@ export default function ProductivityRates({ projectName }: ProductivityRatesProp
     setErrorMessage("");
     getProductivityRates()
       .then((payload) => {
-        const resolvedBlocks = payload.blocks?.length ? payload.blocks : defaultPayload.blocks;
+        const resolvedBlocks = payload.blocks?.length ? normalizeBlocks(payload.blocks) : defaultPayload.blocks;
         setBlocks(resolvedBlocks);
+        setRowOverrides({});
         setFactor(payload.factor ?? "1");
         lastSavedRef.current = JSON.stringify({ factor: payload.factor ?? "1", blocks: resolvedBlocks });
         setIsDirty(false);
       })
       .catch((error: unknown) => {
         setBlocks(defaultPayload.blocks);
+        setRowOverrides({});
         setFactor(defaultPayload.factor);
         setErrorMessage((error as Error).message || "Failed to load productivity rates.");
         lastSavedRef.current = JSON.stringify({ factor: defaultPayload.factor, blocks: defaultPayload.blocks });
@@ -81,27 +123,78 @@ export default function ProductivityRates({ projectName }: ProductivityRatesProp
     setBlocks((current) => current.map((block) => (block.id === blockId ? updater(block) : block)));
   }, []);
 
+  const updateBlockSharedField = useCallback(
+    (blockId: string, field: "hoursPerDay" | "dailyProductivity", value: string) => {
+      updateBlock(blockId, (block) => ({
+        ...block,
+        [field]: value,
+        equipmentRows: block.equipmentRows.map((row) => {
+          if (rowOverrides[row.id]?.[field]) return row;
+          return { ...row, [field]: value };
+        }),
+      }));
+    },
+    [updateBlock, rowOverrides]
+  );
+
   const updateRow = useCallback(
     (
       blockId: string,
       section: "manpowerRows" | "equipmentRows",
       rowId: string,
-      field: "label" | "quantity" | "hourlyRate",
+      field: "label" | "quantity" | "hourlyRate" | "hoursPerDay" | "dailyProductivity",
       value: string
     ) => {
-      updateBlock(blockId, (block) => ({
-        ...block,
-        [section]: block[section].map((row) => (row.id === rowId ? { ...row, [field]: value } : row)),
-      }));
+      let isPrimaryRow = false;
+      updateBlock(blockId, (block) => {
+        if (section !== "equipmentRows") {
+          return {
+            ...block,
+            [section]: block[section].map((row) => (row.id === rowId ? { ...row, [field]: value } : row)),
+          };
+        }
+        const primaryRowId = getPrimaryEquipmentRowId(block);
+        const isBroadcastField = field === "hoursPerDay" || field === "dailyProductivity";
+        isPrimaryRow = rowId === primaryRowId;
+        if (isBroadcastField && isPrimaryRow) {
+          const updateRowValue = (row: ProductivityRatesRow) => {
+            if (row.id !== rowId && rowOverrides[row.id]?.[field]) {
+              return row;
+            }
+            return { ...row, [field]: value };
+          };
+          return {
+            ...block,
+            equipmentRows: block.equipmentRows.map(updateRowValue),
+          };
+        }
+        return {
+          ...block,
+          [section]: block[section].map((row) => (row.id === rowId ? { ...row, [field]: value } : row)),
+        };
+      });
+      if (
+        section === "equipmentRows" &&
+        (field === "hoursPerDay" || field === "dailyProductivity") &&
+        !isPrimaryRow
+      ) {
+        setRowOverrides((current) => ({
+          ...current,
+          [rowId]: { ...current[rowId], [field]: true },
+        }));
+      }
     },
-    [updateBlock]
+    [updateBlock, rowOverrides]
   );
 
   const addRow = useCallback(
     (blockId: string, section: "manpowerRows" | "equipmentRows") => {
       updateBlock(blockId, (block) => ({
         ...block,
-        [section]: [...block[section], createRow()],
+        [section]:
+          section === "equipmentRows"
+            ? [...block[section], createRow("", getPrimaryEquipmentRowValues(block))]
+            : [...block[section], createRow()],
       }));
     },
     [updateBlock]
@@ -141,10 +234,42 @@ export default function ProductivityRates({ projectName }: ProductivityRatesProp
   const handleSave = useCallback(() => {
     setSaving(true);
     setErrorMessage("");
-    saveProductivityRates({ factor, blocks })
+    const factorValue = parseNumber(factor);
+    const enrichedBlocks = blocks.map((block) => {
+      const hoursValue = parseNumber(block.hoursPerDay);
+      const productivityValue = parseNumber(block.dailyProductivity);
+      const manpowerSum = block.manpowerRows.reduce((sum, row) => sum + parseNumber(row.quantity), 0);
+      const manpowerMh = productivityValue ? (manpowerSum * hoursValue) / productivityValue : 0;
+      const manpowerRate = manpowerMh * factorValue;
+      return {
+        ...block,
+        manpowerMh: formatNumber(manpowerMh),
+        manpowerRate: formatNumber(manpowerRate),
+        manpowerRows: block.manpowerRows.map((row) => ({
+          id: row.id,
+          label: row.label,
+          quantity: row.quantity,
+        })),
+        equipmentRows: block.equipmentRows.map((row) => {
+          const rowQty = parseNumber(row.quantity);
+          const rowHours = parseNumber(row.hoursPerDay ?? "");
+          const rowProductivity = parseNumber(row.dailyProductivity ?? "");
+          const rowMh = rowProductivity ? (rowQty * rowHours) / rowProductivity : 0;
+          const hourlyRateValue = parseNumber(row.hourlyRate ?? "");
+          const rowRate = rowMh * hourlyRateValue;
+          return {
+            ...row,
+            mh: formatNumber(rowMh),
+            rate: formatNumber(rowRate),
+          };
+        }),
+      };
+    });
+    saveProductivityRates({ factor, blocks: enrichedBlocks })
       .then(() => {
         setSaveMessage("Saved.");
-        lastSavedRef.current = JSON.stringify({ factor, blocks });
+        setBlocks(enrichedBlocks);
+        lastSavedRef.current = JSON.stringify({ factor, blocks: enrichedBlocks });
         setIsDirty(false);
         setTimeout(() => setSaveMessage(""), 3000);
       })
@@ -225,13 +350,6 @@ export default function ProductivityRates({ projectName }: ProductivityRatesProp
         <div className="productivity-blocks">
           {blocks.map((block, index) => {
             const factorValue = parseNumber(factor);
-            const hoursValue = parseNumber(block.hoursPerDay);
-            const productivityValue = parseNumber(block.dailyProductivity);
-
-            const manpowerSum = block.manpowerRows.reduce((sum, row) => sum + parseNumber(row.quantity), 0);
-            const manpowerMh = productivityValue ? (manpowerSum * hoursValue) / productivityValue : 0;
-            const manpowerRate = manpowerMh * factorValue;
-
             const totalRows = block.manpowerRows.length + block.equipmentRows.length;
 
             return (
@@ -266,6 +384,11 @@ export default function ProductivityRates({ projectName }: ProductivityRatesProp
                     <tbody>
                       {block.manpowerRows.map((row, rowIndex) => {
                         const showShared = rowIndex === 0;
+                        const hoursValue = parseNumber(block.hoursPerDay);
+                        const productivityValue = parseNumber(block.dailyProductivity);
+                        const manpowerSum = block.manpowerRows.reduce((sum, item) => sum + parseNumber(item.quantity), 0);
+                        const manpowerMh = productivityValue ? (manpowerSum * hoursValue) / productivityValue : 0;
+                        const manpowerRate = manpowerMh * factorValue;
                         return (
                           <tr key={row.id} className="productivity-row productivity-row--manpower">
                             {showShared && (
@@ -348,7 +471,7 @@ export default function ProductivityRates({ projectName }: ProductivityRatesProp
                                   step="0.01"
                                   value={block.hoursPerDay}
                                   onChange={(event) =>
-                                    updateBlock(block.id, (current) => ({ ...current, hoursPerDay: event.target.value }))
+                                    updateBlockSharedField(block.id, "hoursPerDay", event.target.value)
                                   }
                                 />
                               ) : (
@@ -362,10 +485,7 @@ export default function ProductivityRates({ projectName }: ProductivityRatesProp
                                   step="0.01"
                                   value={block.dailyProductivity}
                                   onChange={(event) =>
-                                    updateBlock(block.id, (current) => ({
-                                      ...current,
-                                      dailyProductivity: event.target.value,
-                                    }))
+                                    updateBlockSharedField(block.id, "dailyProductivity", event.target.value)
                                   }
                                 />
                               ) : (
@@ -392,7 +512,9 @@ export default function ProductivityRates({ projectName }: ProductivityRatesProp
                       {block.equipmentRows.map((row, rowIndex) => {
                         const showShared = rowIndex === 0;
                         const rowQty = parseNumber(row.quantity);
-                        const equipmentMh = productivityValue ? (rowQty * hoursValue) / productivityValue : 0;
+                        const rowHours = parseNumber(row.hoursPerDay ?? "");
+                        const rowProductivity = parseNumber(row.dailyProductivity ?? "");
+                        const equipmentMh = rowProductivity ? (rowQty * rowHours) / rowProductivity : 0;
                         const hourlyRateValue = parseNumber(row.hourlyRate ?? "");
                         const equipmentRate = equipmentMh * hourlyRateValue;
                         return (
@@ -451,35 +573,24 @@ export default function ProductivityRates({ projectName }: ProductivityRatesProp
                               />
                             </td>
                             <td>
-                              {showShared ? (
-                                <input
-                                  type="number"
-                                  step="0.01"
-                                  value={block.hoursPerDay}
-                                  onChange={(event) =>
-                                    updateBlock(block.id, (current) => ({ ...current, hoursPerDay: event.target.value }))
-                                  }
-                                />
-                              ) : (
-                                <span className="productivity-cell--empty" />
-                              )}
+                              <input
+                                type="number"
+                                step="0.01"
+                                value={row.hoursPerDay}
+                                onChange={(event) =>
+                                  updateRow(block.id, "equipmentRows", row.id, "hoursPerDay", event.target.value)
+                                }
+                              />
                             </td>
                             <td>
-                              {showShared ? (
-                                <input
-                                  type="number"
-                                  step="0.01"
-                                  value={block.dailyProductivity}
-                                  onChange={(event) =>
-                                    updateBlock(block.id, (current) => ({
-                                      ...current,
-                                      dailyProductivity: event.target.value,
-                                    }))
-                                  }
-                                />
-                              ) : (
-                                <span className="productivity-cell--empty" />
-                              )}
+                              <input
+                                type="number"
+                                step="0.01"
+                                value={row.dailyProductivity}
+                                onChange={(event) =>
+                                  updateRow(block.id, "equipmentRows", row.id, "dailyProductivity", event.target.value)
+                                }
+                              />
                             </td>
                             <td className="productivity-cell--calc productivity-col-mh">{formatNumber(equipmentMh)}</td>
                             <td className="productivity-cell--calc productivity-col-rate">{formatNumber(equipmentRate)}</td>
