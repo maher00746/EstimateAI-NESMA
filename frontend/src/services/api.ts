@@ -17,6 +17,7 @@ import type {
   ProjectSummary,
   ProjectFile,
   ProjectItem,
+  ProductivityRatesPayload,
 } from "../types";
 
 const API_BASE = "";
@@ -361,6 +362,19 @@ export async function updateProjectName(projectId: string, name: string): Promis
 export async function removeProject(projectId: string): Promise<void> {
   await safeFetch(`${API_BASE}/api/projects/${encodeURIComponent(projectId)}`, {
     method: "DELETE",
+  });
+}
+
+export async function getProductivityRates(): Promise<ProductivityRatesPayload> {
+  return safeFetch(`${API_BASE}/api/productivity-rates`);
+}
+
+export async function saveProductivityRates(
+  payload: Pick<ProductivityRatesPayload, "factor" | "blocks">
+): Promise<ProductivityRatesPayload> {
+  return safeFetch(`${API_BASE}/api/productivity-rates`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
   });
 }
 

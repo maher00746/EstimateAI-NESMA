@@ -3130,3 +3130,285 @@ body.modal-open {
   background: rgba(239, 68, 68, 0.1);
   color: #ef4444;
 }
+
+
+.productivity-page .panel__body {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.productivity-header {
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.productivity-header__actions {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.productivity-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.productivity-actions .btn-match {
+  padding: 0.3rem 0.6rem;
+  font-size: 0.72rem;
+  border-radius: 0.45rem;
+}
+
+.productivity-actions--footer {
+  margin-top: 0.5rem;
+}
+
+.productivity-blocks {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.productivity-block {
+  border: 1px solid rgba(114, 252, 209, 0.15);
+  border-radius: 0.6rem;
+  padding: 0.75rem;
+  background: rgba(10, 15, 34, 0.6);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.productivity-block__header {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 1rem;
+}
+
+.productivity-block__meta-actions {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.block-delete-button {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  border: 1px solid rgba(239, 68, 68, 0.5);
+  background: rgba(239, 68, 68, 0.15);
+  color: rgba(239, 68, 68, 0.9);
+  font-size: 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0;
+}
+
+.productivity-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.78rem;
+  color: rgba(227, 233, 255, 0.8);
+}
+
+.productivity-field--inline {
+  min-width: 140px;
+  align-self: flex-end;
+}
+
+.productivity-field input {
+  border-radius: 0.45rem;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(5, 10, 25, 0.7);
+  color: #e3e9ff;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.82rem;
+  height: 36px;
+}
+
+.productivity-header__actions .btn-secondary {
+  height: 36px;
+  padding: 0 1rem;
+}
+
+.productivity-table-wrapper {
+  overflow-x: auto;
+}
+
+.productivity-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 720px;
+}
+
+.productivity-table th,
+.productivity-table td {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 0.35rem 0.45rem;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.productivity-col-unit {
+  width: 56px;
+  min-width: 56px;
+}
+
+.productivity-col-mh,
+.productivity-col-rate {
+  width: 90px;
+  min-width: 90px;
+}
+
+.productivity-col-hourly {
+  width: 90px;
+  min-width: 90px;
+  text-align: right;
+}
+
+.productivity-col-hourly input {
+  text-align: right;
+}
+
+.productivity-table th {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: rgba(227, 233, 255, 0.7);
+  background: rgba(114, 252, 209, 0.12);
+}
+
+.productivity-table input {
+  width: 100%;
+  border-radius: 0.35rem;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(5, 10, 25, 0.7);
+  color: #e3e9ff;
+  padding: 0.28rem 0.4rem;
+  font-size: 0.78rem;
+}
+
+.productivity-textarea {
+  width: 100%;
+  border-radius: 0.35rem;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(5, 10, 25, 0.7);
+  color: #e3e9ff;
+  padding: 0.28rem 0.4rem;
+  font-size: 0.78rem;
+  line-height: 1.2;
+  min-height: 60px;
+  resize: vertical;
+  font-family: inherit;
+}
+
+.productivity-table--compact td,
+.productivity-table--compact th {
+  font-size: 0.72rem;
+}
+
+.productivity-cell-with-action {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.row-action-buttons {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.inline-add-button {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  border: 1px solid rgba(114, 252, 209, 0.4);
+  background: rgba(114, 252, 209, 0.15);
+  color: #72fcd1;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0;
+}
+
+.inline-remove-button {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  background: rgba(239, 68, 68, 0.12);
+  color: rgba(239, 68, 68, 0.9);
+  font-size: 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0;
+}
+
+.inline-remove-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.inline-add-button--equipment {
+  border-color: rgba(255, 155, 63, 0.5);
+  color: rgba(255, 185, 110, 0.95);
+  background: rgba(255, 155, 63, 0.15);
+}
+
+.inline-remove-button--equipment {
+  border-color: rgba(255, 155, 63, 0.45);
+  color: rgba(255, 185, 110, 0.9);
+  background: rgba(255, 155, 63, 0.12);
+}
+
+.productivity-row--manpower {
+  background: transparent;
+}
+
+.productivity-row--manpower .productivity-cell--shared {
+  background: transparent;
+}
+
+.productivity-row--manpower td:not(.productivity-cell--shared) {
+  background: rgba(90, 180, 255, 0.26);
+}
+
+.productivity-row--equipment {
+  background: rgba(255, 155, 63, 0.12);
+}
+
+.productivity-row--equipment-start td {
+  border-top: 2px solid rgba(255, 155, 63, 0.35);
+}
+
+.productivity-cell--calc {
+  background: rgba(255, 255, 255, 0.02);
+  font-weight: 600;
+  text-align: center;
+}
+
+.productivity-cell--shared input {
+  min-width: 160px;
+}
+
+.productivity-cell--shared .productivity-textarea {
+  min-width: 160px;
+}
+
+.productivity-cell--empty {
+  display: block;
+  min-height: 20px;
+}
+
+@media (max-width: 960px) {
+  .productivity-header {
+    flex-direction: column;
+  }
+}

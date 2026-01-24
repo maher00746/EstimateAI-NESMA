@@ -199,6 +199,29 @@ export interface ProjectSummary {
   updatedAt: string;
 }
 
+export interface ProductivityRatesRow {
+  id: string;
+  label: string;
+  quantity: string;
+  hourlyRate?: string;
+}
+
+export interface ProductivityRatesBlock {
+  id: string;
+  description: string;
+  unit: string;
+  hoursPerDay: string;
+  dailyProductivity: string;
+  manpowerRows: ProductivityRatesRow[];
+  equipmentRows: ProductivityRatesRow[];
+}
+
+export interface ProductivityRatesPayload {
+  factor: string;
+  blocks: ProductivityRatesBlock[];
+  updatedAt?: string | null;
+}
+
 export type ProjectFileStatus = "pending" | "processing" | "ready" | "failed";
 export type ProjectFileType = "drawing" | "boq";
 

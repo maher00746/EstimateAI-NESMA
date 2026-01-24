@@ -6,6 +6,7 @@ import estimatesRouter from "./routes/estimates";
 import projectsRouter from "./routes/projects";
 import promptsRouter from "./routes/prompts";
 import authRouter from "./routes/auth";
+import productivityRatesRouter from "./routes/productivityRates";
 import { authenticate } from "./middleware/auth";
 
 const app = express();
@@ -22,6 +23,7 @@ app.use("/files", express.static(path.resolve(config.staticDir)));
 app.use("/api/estimates", authenticate, estimatesRouter);
 app.use("/api/projects", authenticate, projectsRouter);
 app.use("/api/prompts", authenticate, promptsRouter);
+app.use("/api/productivity-rates", authenticate, productivityRatesRouter);
 
 app.use((req, res) => {
   res.status(404).json({ message: "Route not found" });

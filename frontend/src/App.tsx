@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
 import CadExtraction from "./pages/CadExtraction";
+import ProductivityRates from "./pages/ProductivityRates";
 import type { CadExtractionItem, ProjectFile, ProjectItem, ProjectLog, ProjectSummary } from "./types";
 import {
   addProjectFileItem,
@@ -20,7 +21,7 @@ import {
   uploadProjectFiles,
 } from "./services/api";
 
-type AppPage = "home" | "projects" | "upload" | "extract" | "file-review";
+type AppPage = "home" | "projects" | "upload" | "extract" | "file-review" | "productivity-rates";
 
 type CadItemWithId = CadExtractionItem & { id: string };
 
@@ -94,6 +95,23 @@ export default function App() {
   const [deleteItemTarget, setDeleteItemTarget] = useState<ProjectItem | null>(null);
   const [activeBoqTab, setActiveBoqTab] = useState<string>("all");
 
+  const [pendingPageChange, setPendingPageChange] = useState<AppPage | null>(null);
+  const [unsavedDialogOpen, setUnsavedDialogOpen] = useState(false);
+
+  const requestPageChange = useCallback(
+    (nextPage: AppPage) => {
+      const isLeavingProductivity = activePage === "productivity-rates" && nextPage !== "productivity-rates";
+      const isDirty = (window as typeof window & { __productivityDirty?: boolean }).__productivityDirty;
+      if (isLeavingProductivity && isDirty) {
+        setPendingPageChange(nextPage);
+        setUnsavedDialogOpen(true);
+        return;
+      }
+      setActivePage(nextPage);
+    },
+    [activePage]
+  );
+
   const pushNotification = useCallback((message: string) => {
     const id = `${Date.now()}-${Math.random()}`;
     setNotifications((current) => [{ id, message }, ...current]);
@@ -135,7 +153,7 @@ export default function App() {
 
   useEffect(() => {
     void refreshProjects();
-  }, [refreshProjects]);
+  }, [refreshProjects, requestPageChange]);
 
   useEffect(() => {
     if (activePage === "projects" || activePage === "home") {
@@ -197,7 +215,7 @@ export default function App() {
       setActiveProject(project);
       setDrawings([]);
       setBoqFile(null);
-      setActivePage("upload");
+      requestPageChange("upload");
       setMaxStepReached(0);
       void refreshProjects();
     } catch (error) {
@@ -208,7 +226,7 @@ export default function App() {
   const handleOpenProject = useCallback(async (project: ProjectSummary) => {
     setOpeningProject(true);
     setActiveProject(project);
-    setActivePage("extract");
+    requestPageChange("extract");
     setMaxStepReached(1);
     try {
       await refreshProjectData(project.id);
@@ -217,7 +235,7 @@ export default function App() {
     } finally {
       setOpeningProject(false);
     }
-  }, [refreshProjectData]);
+  }, [refreshProjectData, requestPageChange]);
 
   const handleDeleteProject = useCallback(async () => {
     if (!deleteTarget) return;
@@ -226,7 +244,7 @@ export default function App() {
       await removeProject(deleteTarget.id);
       if (activeProject?.id === deleteTarget.id) {
         setActiveProject(null);
-        setActivePage("home");
+        requestPageChange("home");
       }
       setDeleteTarget(null);
       await refreshProjects();
@@ -235,7 +253,7 @@ export default function App() {
     } finally {
       setDeletingProject(false);
     }
-  }, [activeProject, deleteTarget, refreshProjects]);
+  }, [activeProject, deleteTarget, refreshProjects, requestPageChange]);
 
   const handleDeleteFile = useCallback(async () => {
     if (!activeProject || !deleteFileTarget) return;
@@ -244,7 +262,7 @@ export default function App() {
       await removeProjectFile(activeProject.id, deleteFileTarget.id);
       if (activeFile?.id === deleteFileTarget.id) {
         setActiveFile(null);
-        setActivePage("extract");
+        requestPageChange("extract");
       }
       setDeleteFileTarget(null);
       await refreshProjectData(activeProject.id);
@@ -255,7 +273,7 @@ export default function App() {
     } finally {
       setDeletingFile(false);
     }
-  }, [activeFile, activeProject, deleteFileTarget, refreshProjectData]);
+  }, [activeFile, activeProject, deleteFileTarget, refreshProjectData, requestPageChange]);
 
   const handleRetryFile = useCallback(
     async (file: ProjectFile) => {
@@ -288,7 +306,7 @@ export default function App() {
       const uploaded = await uploadProjectFiles(activeProject.id, drawings, boqFile);
       const uploadedIds = uploaded.files.map((file) => file.id);
       await startProjectExtraction(activeProject.id, uuidv4(), uploadedIds);
-      setActivePage("extract");
+      requestPageChange("extract");
       setMaxStepReached(1);
       await refreshProjectData(activeProject.id);
     } catch (error) {
@@ -296,13 +314,13 @@ export default function App() {
     } finally {
       setPageLoadingMessage(null);
     }
-  }, [activeProject, boqFile, drawings, projectNameInput, refreshProjectData]);
+  }, [activeProject, boqFile, drawings, projectNameInput, refreshProjectData, requestPageChange]);
 
   const handleOpenFile = useCallback(async (file: ProjectFile) => {
     if (!activeProject) return;
     setPageLoadingMessage("Opening file…");
     setActiveFile(file);
-    setActivePage("file-review");
+    requestPageChange("file-review");
     try {
       const items = await listProjectFileItems(activeProject.id, file.id);
       setFileItems(items);
@@ -312,7 +330,7 @@ export default function App() {
     } finally {
       setPageLoadingMessage(null);
     }
-  }, [activeProject]);
+  }, [activeProject, requestPageChange]);
 
   const handleEditItem = useCallback((item: ProjectItem) => {
     setEditingItemId(item.id);
@@ -500,7 +518,7 @@ export default function App() {
                 } ${isClickable ? "is-clickable" : ""} ${isDisabled ? "is-disabled" : ""}`}
               onClick={() => {
                 if (isClickable && targetPage) {
-                  setActivePage(targetPage);
+                  requestPageChange(targetPage);
                 }
               }}
               disabled={isDisabled}
@@ -605,7 +623,7 @@ export default function App() {
         <button
           type="button"
           className="brand"
-          onClick={() => setActivePage("home")}
+          onClick={() => requestPageChange("home")}
           aria-label="Go to home"
         >
           <div className="brand__icon">
@@ -624,7 +642,7 @@ export default function App() {
           <button
             type="button"
             className="nav-link is-active"
-            onClick={() => setActivePage("home")}
+            onClick={() => requestPageChange("home")}
           >
             <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
               <path d="M3 9.5l7-6 7 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
@@ -635,12 +653,23 @@ export default function App() {
           <button
             type="button"
             className={`nav-link ${activePage === "projects" ? "is-active" : ""}`}
-            onClick={() => setActivePage("projects")}
+            onClick={() => requestPageChange("projects")}
           >
             <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
               <path d="M4 5h12M4 10h12M4 15h12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
             </svg>
             <span>Projects</span>
+          </button>
+          <button
+            type="button"
+            className={`nav-link ${activePage === "productivity-rates" ? "is-active" : ""}`}
+            onClick={() => requestPageChange("productivity-rates")}
+            title="Manage productivity rates"
+          >
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <path d="M4 14h12M6 10h8M8 6h4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+            </svg>
+            <span>Productivity Rates</span>
           </button>
         </nav>
 
@@ -771,7 +800,7 @@ export default function App() {
                     <button type="button" className="btn-match" onClick={() => void handleNewProject()}>
                       Start New Project
                     </button>
-                    <button type="button" className="btn-secondary" onClick={() => setActivePage("extract")} disabled={!activeProject}>
+                    <button type="button" className="btn-secondary" onClick={() => requestPageChange("extract")} disabled={!activeProject}>
                       Resume Active Project
                     </button>
                   </div>
@@ -847,6 +876,10 @@ export default function App() {
               )}
             </div>
           </section>
+        )}
+
+        {activePage === "productivity-rates" && (
+          <ProductivityRates projectName={activeProject?.name} />
         )}
 
         {activePage === "upload" && activeProject && (
@@ -1297,7 +1330,7 @@ export default function App() {
             fileUrl={activeFile.fileUrl}
             fileName={activeFile.fileName}
             items={cadReviewItems}
-            onBack={() => setActivePage("extract")}
+            onBack={() => requestPageChange("extract")}
             onSave={handleSaveFileItems}
           />
         )}
@@ -1457,6 +1490,40 @@ export default function App() {
                 </button>
                 <button type="button" className="btn-match" onClick={() => void handleDeleteProject()} disabled={deletingProject}>
                   {deletingProject ? "Deleting…" : "Delete"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {unsavedDialogOpen && (
+          <div className="modal-backdrop" role="presentation">
+            <div className="modal" role="dialog" aria-modal="true" aria-labelledby="unsaved-changes-title">
+              <div className="modal__header">
+                <h3 className="modal__title" id="unsaved-changes-title">Unsaved Changes</h3>
+                <button type="button" className="modal__close" onClick={() => setUnsavedDialogOpen(false)}>
+                  ×
+                </button>
+              </div>
+              <div className="modal__body">
+                <p>You have unsaved changes. Do you want to leave without saving?</p>
+              </div>
+              <div className="modal__footer">
+                <button type="button" className="btn-secondary" onClick={() => setUnsavedDialogOpen(false)}>
+                  Stay
+                </button>
+                <button
+                  type="button"
+                  className="btn-match"
+                  onClick={() => {
+                    if (pendingPageChange) {
+                      setActivePage(pendingPageChange);
+                    }
+                    setPendingPageChange(null);
+                    setUnsavedDialogOpen(false);
+                  }}
+                >
+                  Leave
                 </button>
               </div>
             </div>
