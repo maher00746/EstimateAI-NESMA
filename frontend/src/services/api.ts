@@ -378,6 +378,15 @@ export async function saveProductivityRates(
   });
 }
 
+export async function importProductivityRates(file: File): Promise<ProductivityRatesPayload> {
+  const data = new FormData();
+  data.append("file", file);
+  return safeFetch(`${API_BASE}/api/productivity-rates/import`, {
+    method: "POST",
+    body: data,
+  });
+}
+
 export async function retryProjectFile(projectId: string, fileId: string, idempotencyKey: string): Promise<{
   id: string;
   fileId: string;

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
 import type { ProductivityRatesBlock, ProductivityRatesPayload, ProductivityRatesRow } from "../types";
-import { getProductivityRates, saveProductivityRates } from "../services/api";
+import { getProductivityRates, importProductivityRates, saveProductivityRates } from "../services/api";
 
 type ProductivityRatesProps = {
   projectName?: string;
@@ -77,6 +77,10 @@ export default function ProductivityRates({ projectName }: ProductivityRatesProp
   const [saving, setSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [isDirty, setIsDirty] = useState(false);
+  const [importModalOpen, setImportModalOpen] = useState(false);
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState("");
   const [rowOverrides, setRowOverrides] = useState<Record<string, { hoursPerDay?: boolean; dailyProductivity?: boolean }>>(
     {}
   );
@@ -92,28 +96,42 @@ export default function ProductivityRates({ projectName }: ProductivityRatesProp
     []
   );
 
+  const refreshProductivityRates = useCallback(
+    (showLoading = true) => {
+      if (showLoading) {
+        setLoading(true);
+      }
+      setErrorMessage("");
+      return getProductivityRates()
+        .then((payload) => {
+          const resolvedBlocks = payload.blocks?.length ? normalizeBlocks(payload.blocks) : defaultPayload.blocks;
+          const resolvedFactor = payload.factor ?? "1";
+          setBlocks(resolvedBlocks);
+          setRowOverrides({});
+          setFactor(resolvedFactor);
+          lastSavedRef.current = JSON.stringify({ factor: resolvedFactor, blocks: resolvedBlocks });
+          setIsDirty(false);
+        })
+        .catch((error: unknown) => {
+          setBlocks(defaultPayload.blocks);
+          setRowOverrides({});
+          setFactor(defaultPayload.factor);
+          setErrorMessage((error as Error).message || "Failed to load productivity rates.");
+          lastSavedRef.current = JSON.stringify({ factor: defaultPayload.factor, blocks: defaultPayload.blocks });
+          setIsDirty(false);
+        })
+        .finally(() => {
+          if (showLoading) {
+            setLoading(false);
+          }
+        });
+    },
+    [defaultPayload]
+  );
+
   useEffect(() => {
-    setLoading(true);
-    setErrorMessage("");
-    getProductivityRates()
-      .then((payload) => {
-        const resolvedBlocks = payload.blocks?.length ? normalizeBlocks(payload.blocks) : defaultPayload.blocks;
-        setBlocks(resolvedBlocks);
-        setRowOverrides({});
-        setFactor(payload.factor ?? "1");
-        lastSavedRef.current = JSON.stringify({ factor: payload.factor ?? "1", blocks: resolvedBlocks });
-        setIsDirty(false);
-      })
-      .catch((error: unknown) => {
-        setBlocks(defaultPayload.blocks);
-        setRowOverrides({});
-        setFactor(defaultPayload.factor);
-        setErrorMessage((error as Error).message || "Failed to load productivity rates.");
-        lastSavedRef.current = JSON.stringify({ factor: defaultPayload.factor, blocks: defaultPayload.blocks });
-        setIsDirty(false);
-      })
-      .finally(() => setLoading(false));
-  }, [defaultPayload]);
+    void refreshProductivityRates(true);
+  }, [refreshProductivityRates]);
 
   useEffect(() => {
     setSaveMessage("");
@@ -279,6 +297,30 @@ export default function ProductivityRates({ projectName }: ProductivityRatesProp
       .finally(() => setSaving(false));
   }, [factor, blocks]);
 
+  const closeImportModal = useCallback(() => {
+    setImportModalOpen(false);
+    setImportFile(null);
+    setImportError("");
+  }, []);
+
+  const handleImport = useCallback(() => {
+    if (!importFile) {
+      setImportError("Please choose a JSON file to upload.");
+      return;
+    }
+    setImporting(true);
+    setImportError("");
+    importProductivityRates(importFile)
+      .then(() => refreshProductivityRates(false))
+      .then(() => {
+        closeImportModal();
+      })
+      .catch((error: unknown) => {
+        setImportError((error as Error).message || "Failed to import productivity rates.");
+      })
+      .finally(() => setImporting(false));
+  }, [importFile, refreshProductivityRates, closeImportModal]);
+
   const serialized = useMemo(() => JSON.stringify({ factor, blocks }), [factor, blocks]);
 
   useEffect(() => {
@@ -339,6 +381,9 @@ export default function ProductivityRates({ projectName }: ProductivityRatesProp
               onChange={(event) => setFactor(event.target.value)}
             />
           </label>
+          <button type="button" className="btn-secondary" onClick={() => setImportModalOpen(true)} disabled={saving || importing}>
+            Load Data
+          </button>
           <button type="button" className="btn-secondary" onClick={handleSave} disabled={saving}>
             {saving ? "Saving..." : "Save"}
           </button>
@@ -644,6 +689,46 @@ export default function ProductivityRates({ projectName }: ProductivityRatesProp
               </button>
               <button type="button" className="btn-match" onClick={confirmDeleteAction}>
                 Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {importModalOpen && (
+        <div className="modal-backdrop" role="presentation">
+          <div className="modal" role="dialog" aria-modal="true" aria-labelledby="import-productivity-title">
+            <div className="modal__header">
+              <h3 className="modal__title" id="import-productivity-title">
+                Load Productivity Rates
+              </h3>
+              <button type="button" className="modal__close" onClick={closeImportModal} disabled={importing}>
+                ×
+              </button>
+            </div>
+            <div className="modal__body">
+              <label className="productivity-field">
+                Upload JSON File
+                <input
+                  type="file"
+                  accept=".json,application/json"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0] ?? null;
+                    setImportFile(file);
+                    setImportError("");
+                  }}
+                  disabled={importing}
+                />
+              </label>
+              {importFile && <p className="status">Selected: {importFile.name}</p>}
+              {importError && <p className="feedback">{importError}</p>}
+              {importing && <p className="loading-text">Reading data and updating productivity rates...</p>}
+            </div>
+            <div className="modal__footer">
+              <button type="button" className="btn-secondary" onClick={closeImportModal} disabled={importing}>
+                Cancel
+              </button>
+              <button type="button" className="btn-match" onClick={handleImport} disabled={importing}>
+                {importing ? "Reading..." : "Read Data"}
               </button>
             </div>
           </div>
