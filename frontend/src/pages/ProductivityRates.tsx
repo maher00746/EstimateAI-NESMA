@@ -37,6 +37,8 @@ const parseNumber = (value: string) => {
 
 const formatNumber = (value: number) => value.toFixed(2);
 
+const serializeNumber = (value: number) => (Number.isFinite(value) ? String(value) : "0");
+
 const getPrimaryEquipmentRowId = (block: ProductivityRatesBlock) => block.equipmentRows[0]?.id;
 
 const getPrimaryEquipmentRowValues = (block: ProductivityRatesBlock) => {
@@ -261,8 +263,8 @@ export default function ProductivityRates({ projectName }: ProductivityRatesProp
       const manpowerRate = manpowerMh * factorValue;
       return {
         ...block,
-        manpowerMh: formatNumber(manpowerMh),
-        manpowerRate: formatNumber(manpowerRate),
+        manpowerMh: serializeNumber(manpowerMh),
+        manpowerRate: serializeNumber(manpowerRate),
         manpowerRows: block.manpowerRows.map((row) => ({
           id: row.id,
           label: row.label,
@@ -277,8 +279,8 @@ export default function ProductivityRates({ projectName }: ProductivityRatesProp
           const rowRate = rowMh * hourlyRateValue;
           return {
             ...row,
-            mh: formatNumber(rowMh),
-            rate: formatNumber(rowRate),
+            mh: serializeNumber(rowMh),
+            rate: serializeNumber(rowRate),
           };
         }),
       };

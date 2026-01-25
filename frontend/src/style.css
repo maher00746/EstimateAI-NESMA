@@ -787,23 +787,57 @@ body {
 
 .pricing-table-wrapper {
   position: relative;
-  overflow-x: hidden;
-  overflow-y: auto;
+  overflow-x: auto;
+  overflow-y: visible;
 }
 
 .pricing-table {
   table-layout: fixed;
+  width: max-content;
+  min-width: 0;
 }
 
 .pricing-table th,
 .pricing-table td {
   white-space: normal;
   word-break: break-word;
+  min-width: 120px;
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.pricing-table th:last-child,
+.pricing-table td:last-child {
+  border-right: none;
+}
+
+.pricing-col-code {
+  min-width: 30px;
+  width: 30px;
+  max-width: 30px;
 }
 
 .pricing-table th {
   white-space: nowrap;
   word-break: normal;
+}
+
+.pricing-table thead {
+  position: static !important;
+  z-index: 0 !important;
+}
+
+.pricing-table thead th {
+  position: static !important;
+  z-index: 0 !important;
+}
+
+.pricing-col-description {
+  min-width: 300px;
+  width: 300px;
+}
+
+.pricing-col-description input {
+  min-width: 280px;
 }
 
 .kb-table,
@@ -1385,41 +1419,73 @@ body {
 
 .pricing-match-menu {
   position: fixed;
-  min-width: 220px;
-  max-width: 380px;
-  width: max-content;
-  background: linear-gradient(180deg, #0c1224 0%, #080d1b 100%);
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.55);
-  border: 1px solid rgba(114, 252, 209, 0.28);
-  border-radius: 10px;
-  z-index: 3000;
-  padding: 10px;
+  min-width: 0;
+  max-width: none;
+  width: auto;
+  background-color: #0b1022;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(114, 252, 209, 0.25);
+  border-radius: 8px;
+  z-index: 2147483000;
+  padding: 4px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  opacity: 1;
+  isolation: isolate;
+  background-clip: padding-box;
+  mix-blend-mode: normal;
+  overflow: hidden;
+}
+
+.pricing-match-menu::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: #0b1222;
+  z-index: -1;
+}
+
+.pricing-match-backdrop {
+  position: fixed;
+  background: #0b1222;
+  border-radius: 8px;
+  z-index: 2147482999;
+  pointer-events: none;
 }
 
 .pricing-match-menu__item {
   width: 100%;
   text-align: left;
   border: 1px solid rgba(114, 252, 209, 0.12);
-  background: rgba(255, 255, 255, 0.02);
-  border-radius: 8px;
-  padding: 8px 10px;
-  font-size: 0.9rem;
+  background: #0f182c;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 0.8rem;
   color: #e3e9ff;
   cursor: pointer;
   transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease, box-shadow 0.12s ease;
 }
 
+.pricing-match-menu__item+.pricing-match-menu__item {
+  margin-top: 4px;
+}
+
+.pricing-table .pricing-col-code .inline-remove-button {
+  margin: 0;
+}
+
 .pricing-match-menu__item:hover {
-  background: rgba(114, 252, 209, 0.12);
+  background: #1a2540;
   border-color: rgba(114, 252, 209, 0.35);
   color: #eafdf6;
 }
 
 .pricing-match-menu__item.is-active {
-  background: rgba(65, 155, 255, 0.18);
+  background: #1b2b4a;
   border-color: #419bff;
   color: #dbeaff;
   box-shadow: 0 0 0 1px rgba(65, 155, 255, 0.35);
@@ -2628,7 +2694,7 @@ body {
 }
 
 .pricing-accordion__header:hover {
-  background: rgba(114, 252, 209, 0.08);
+  background: transparent;
 }
 
 .pricing-accordion__chevron {
@@ -3321,6 +3387,14 @@ body.modal-open {
   display: flex;
   align-items: center;
   gap: 0.25rem;
+}
+
+.pricing-table .row-action-buttons {
+  margin-right: 0.35rem;
+}
+
+.pricing-table .productivity-cell-with-action {
+  align-items: flex-start;
 }
 
 .inline-add-button {

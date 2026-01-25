@@ -228,6 +228,16 @@ export interface ProductivityRatesPayload {
   updatedAt?: string | null;
 }
 
+export interface PricingPayload {
+  percentage: string;
+  idleText: string;
+  poRate: string;
+  mpHourlyRate: string;
+  subItemsByItemId: Record<string, unknown>;
+  autoRowQtyByItemId: Record<string, unknown>;
+  updatedAt?: string | null;
+}
+
 export type ProjectFileStatus = "pending" | "processing" | "ready" | "failed";
 export type ProjectFileType = "drawing" | "boq";
 

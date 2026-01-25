@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
 import CadExtraction from "./pages/CadExtraction";
+import Pricing from "./pages/Pricing";
 import ProductivityRates from "./pages/ProductivityRates";
 import type { CadExtractionItem, ProjectFile, ProjectItem, ProjectLog, ProjectSummary } from "./types";
 import {
@@ -21,7 +22,14 @@ import {
   uploadProjectFiles,
 } from "./services/api";
 
-type AppPage = "home" | "projects" | "upload" | "extract" | "file-review" | "productivity-rates";
+type AppPage =
+  | "home"
+  | "projects"
+  | "upload"
+  | "extract"
+  | "file-review"
+  | "productivity-rates"
+  | "pricing";
 
 type CadItemWithId = CadExtractionItem & { id: string };
 
@@ -160,6 +168,12 @@ export default function App() {
       void refreshProjects();
     }
   }, [activePage, refreshProjects]);
+
+  useEffect(() => {
+    const handler = () => requestPageChange("pricing");
+    window.addEventListener("pricing:go", handler);
+    return () => window.removeEventListener("pricing:go", handler);
+  }, [requestPageChange]);
 
   useEffect(() => {
     if (activePage !== "extract" || !activeProject) return;
@@ -882,6 +896,10 @@ export default function App() {
           <ProductivityRates projectName={activeProject?.name} />
         )}
 
+        {activePage === "pricing" && (
+          <Pricing boqItems={boqItems} projectName={activeProject?.name} projectId={activeProject?.id} />
+        )}
+
         {activePage === "upload" && activeProject && (
           <section className="panel">
             <div className="panel__header">
@@ -968,15 +986,24 @@ export default function App() {
                 {renderStepper()}
                 <h2 style={{ marginTop: "0.5rem" }}>Review Project Files</h2>
               </div>
-              <button
-                type="button"
-                className="btn-secondary btn-compact btn-muted review-files-action"
-                onClick={() => setAddFilesOpen(true)}
-              >
-                Add More Files
-              </button>
             </div>
             <div className="panel__body">
+              <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginBottom: "1rem", flexWrap: "wrap" }}>
+                <button
+                  type="button"
+                  className="btn-secondary btn-compact btn-muted"
+                  onClick={() => setAddFilesOpen(true)}
+                >
+                  Add More Files
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary btn-compact btn-muted"
+                  onClick={() => requestPageChange("pricing")}
+                >
+                  Go to Pricing
+                </button>
+              </div>
               {notifications.length > 0 && (
                 <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", marginBottom: "1rem" }}>
                   {notifications.map((note) => (

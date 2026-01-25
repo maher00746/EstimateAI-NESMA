@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { FC } from "react";
 import LandingAiReview from "../LandingAiReview";
 import { extractCadItems } from "../services/api";
 import type { CadExtractionBox, CadExtractionItem } from "../types";
@@ -7,7 +8,7 @@ type CadItemWithId = CadExtractionItem & { id: string };
 
 type CadExtractionMode = "upload" | "review";
 
-type CadExtractionProps = {
+export type CadExtractionProps = {
   mode?: CadExtractionMode;
   fileUrl?: string;
   fileName?: string;
@@ -43,14 +44,14 @@ const serializeCadItems = (items: CadItemWithId[]): string => {
   );
 };
 
-export default function CadExtraction({
+const CadExtraction: FC<CadExtractionProps> = ({
   mode = "upload",
   fileUrl: externalFileUrl,
   fileName: externalFileName,
   items: externalItems,
   onSave,
   onBack,
-}: CadExtractionProps) {
+}) => {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [fileUrl, setFileUrl] = useState<string>("");
   const [items, setItems] = useState<CadItemWithId[]>([]);
@@ -213,6 +214,10 @@ export default function CadExtraction({
     setShowUnsavedPrompt(false);
     onBack();
   }, [onBack]);
+
+  const handleGoToPricing = useCallback(() => {
+    window.dispatchEvent(new CustomEvent("pricing:go"));
+  }, []);
 
   const handleSaveAndBack = useCallback(async () => {
     const saved = await handleSave();
@@ -506,4 +511,6 @@ export default function CadExtraction({
       )}
     </>
   );
-}
+};
+
+export default CadExtraction;

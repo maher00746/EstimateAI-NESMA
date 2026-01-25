@@ -18,6 +18,7 @@ import type {
   ProjectFile,
   ProjectItem,
   ProductivityRatesPayload,
+  PricingPayload,
 } from "../types";
 
 const API_BASE = "";
@@ -384,6 +385,17 @@ export async function importProductivityRates(file: File): Promise<ProductivityR
   return safeFetch(`${API_BASE}/api/productivity-rates/import`, {
     method: "POST",
     body: data,
+  });
+}
+
+export async function getPricing(projectId: string): Promise<PricingPayload> {
+  return safeFetch(`${API_BASE}/api/pricing/${encodeURIComponent(projectId)}`);
+}
+
+export async function savePricing(projectId: string, payload: PricingPayload): Promise<PricingPayload> {
+  return safeFetch(`${API_BASE}/api/pricing/${encodeURIComponent(projectId)}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
   });
 }
 
