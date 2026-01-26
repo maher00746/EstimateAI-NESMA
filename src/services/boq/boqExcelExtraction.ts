@@ -36,7 +36,7 @@ const EXCEL_EXTENSIONS = new Set([".xlsx", ".xls", ".csv"]);
 const BOQ_SHEET_PROMPT = `You are a Senior Quantity Surveyor. You will receive rows from a BOQ Excel sheet.
 
 Task:
-- Identify ONLY BOQ item rows.
+- Identify BOQ item rows, category rows, and notes/instructions/details rows.
 - Track categories as they appear in the sheet, then attach them to subsequent items.
 - Include the rows that are notes/instructions/details that relate to an item or a group of items. The rows are in order, so return the row that contains any details or instructions as it is, as a separate row,
 - Ignore ONLY irrelevant rows (e.g., headers with column titles or unrelated noise).
@@ -48,6 +48,7 @@ Rules:
 1) Input rows are in order. Keep the output in the same order (CRITICAL), each extracted item should be in the same order as input.
 2) A category row is usually a text-only row. Use its exact text as category.
 3) A BOQ item row contains an item key (e.g., A, B, C ,1, 2 ..) and a description. It may also include quantity, unit, rate, and amount.
+4) A notes/instructions/details rows are rows that contain notes/instructions/details that relate to an item or a group of items, they don't have qty or unit, just description,Don't drop them.
 4) If a field is missing in the row, return an empty string for that field.
 5) Do NOT include category-only or subcategory-only rows in the output; they only set context for the following items.
 6) Do NOT return empty rows in the output (no description)
