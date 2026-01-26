@@ -295,3 +295,22 @@ export interface ProjectLog {
   fileName?: string | null;
   createdAt: string;
 }
+
+export type CompareItemResult = {
+  item_code: string;
+  result: "matched" | "mismatch";
+  reason: string;
+};
+
+export interface ProjectCompareResponse {
+  results: CompareItemResult[];
+  stats?: {
+    scheduleCodes: number;
+    boqItems: number;
+    drawingItems: number;
+    comparableItems: number;
+    chunks: number;
+  };
+  cached?: boolean;
+  updatedAt?: string;
+}

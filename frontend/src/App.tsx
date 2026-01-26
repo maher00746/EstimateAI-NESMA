@@ -6,6 +6,7 @@ import BoqFileReview from "./pages/BoqFileReview";
 import ScheduleFileReview from "./pages/ScheduleFileReview";
 import Pricing from "./pages/Pricing";
 import ProductivityRates from "./pages/ProductivityRates";
+import ComparePage from "./pages/ComparePage";
 import type { CadExtractionItem, PricingPayload, ProjectFile, ProjectItem, ProjectLog, ProjectSummary } from "./types";
 import {
   addProjectFileItem,
@@ -120,6 +121,7 @@ export default function App() {
   const pricingSaveRef = useRef<null | (() => Promise<boolean>)>(null);
   const [unsavedDialogContext, setUnsavedDialogContext] = useState<"productivity" | "pricing" | null>(null);
   const activePricingCache = activeProject ? pricingCacheByProject[activeProject.id] : null;
+  const [compareForceNextRun, setCompareForceNextRun] = useState(false);
   type ReviewAccordionKey = "projectFiles" | "boq" | "schedule" | "drawings";
   const [openAccordions, setOpenAccordions] = useState<Record<ReviewAccordionKey, boolean>>({
     projectFiles: true,
@@ -1233,7 +1235,10 @@ export default function App() {
                 <button
                   type="button"
                   className="btn-secondary btn-compact btn-muted"
-                  onClick={() => requestPageChange("compare")}
+                  onClick={() => {
+                    setCompareForceNextRun(true);
+                    requestPageChange("compare");
+                  }}
                 >
                   Go to Compare
                 </button>
@@ -1772,28 +1777,13 @@ export default function App() {
         )}
 
         {activePage === "compare" && activeProject && (
-          <section className="panel">
-            <div className="panel__header panel__header--review">
-              <div className="stepper-container">
-                {renderStepper()}
-                <h2 style={{ marginTop: "0.5rem" }}>Compare BOQ vs Drawings</h2>
-              </div>
-            </div>
-            <div className="panel__body">
-              <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "1rem" }}>
-                <button
-                  type="button"
-                  className="btn-secondary btn-compact btn-muted"
-                  onClick={() => requestPageChange("finalize")}
-                >
-                  Go to Finalize
-                </button>
-              </div>
-              <div className="status" style={{ padding: "0.75rem", background: "rgba(255,255,255,0.04)" }}>
-                Comparison view will appear here once the matching results are ready.
-              </div>
-            </div>
-          </section>
+          <ComparePage
+            projectId={activeProject.id}
+            onNext={() => requestPageChange("finalize")}
+            headerTop={renderStepper()}
+            forceRefresh={compareForceNextRun}
+            onConsumeForce={() => setCompareForceNextRun(false)}
+          />
         )}
 
         {activePage === "finalize" && activeProject && (

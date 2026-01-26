@@ -19,6 +19,7 @@ import type {
   ProjectItem,
   ProductivityRatesPayload,
   PricingPayload,
+  ProjectCompareResponse,
 } from "../types";
 
 const API_BASE = "";
@@ -473,6 +474,16 @@ export async function removeProjectFile(projectId: string, fileId: string): Prom
 
 export async function listProjectItems(projectId: string): Promise<ProjectItem[]> {
   return safeFetch(`${API_BASE}/api/projects/${encodeURIComponent(projectId)}/items`);
+}
+
+export async function compareProjectItems(
+  projectId: string,
+  options?: { force?: boolean }
+): Promise<ProjectCompareResponse> {
+  const params = options?.force ? "?force=1" : "";
+  return safeFetch(`${API_BASE}/api/projects/${encodeURIComponent(projectId)}/compare${params}`, {
+    method: "POST",
+  });
 }
 
 export async function listProjectFileItems(

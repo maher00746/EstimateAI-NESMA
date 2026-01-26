@@ -34,6 +34,8 @@ import { ProjectExtractJobModel } from "../modules/storage/projectExtractionJobM
 import { ProjectItemModel } from "../modules/storage/projectItemModel";
 import { ProjectLogModel } from "../modules/storage/projectLogModel";
 import { ProjectModel } from "../modules/storage/projectModel";
+import { ProjectComparisonModel, type ProjectComparisonDocument } from "../modules/storage/projectComparisonModel";
+import { compareProjectItemsWithOpenAI, BoqCompareGroup, DrawingCompareGroup, CompareResult } from "../services/openai/projectCompare";
 
 const storage = multer.diskStorage({
   destination: config.uploadDir,
@@ -61,6 +63,46 @@ function getUserId(req: AuthRequest): string {
   if (!user?._id) throw new Error("User not found");
   return String(user._id);
 }
+
+const normalizeKey = (value: string): string =>
+  value.trim().toLowerCase().replace(/\s+/g, " ");
+
+const escapeRegex = (value: string): string =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const buildCodeMatcher = (code: string): RegExp | null => {
+  const trimmed = code.trim().toUpperCase();
+  if (trimmed.length < 2) return null;
+  const tokens = trimmed.split(/[\s-]+/).filter(Boolean);
+  if (tokens.length === 0) return null;
+  const joined = tokens.map(escapeRegex).join("[\\s-]*");
+  return new RegExp(`(^|[^A-Z0-9])${joined}(?=$|[^A-Z0-9])`);
+};
+
+const findBoqField = (fields: Record<string, string> | undefined, candidates: string[]): string => {
+  if (!fields) return "";
+  const key = Object.keys(fields).find((fieldKey) => candidates.includes(normalizeKey(fieldKey)));
+  return key ? String(fields[key] ?? "") : "";
+};
+
+const extractScheduleCodes = (items: Array<{ item_code?: string; metadata?: { fields?: Record<string, string> } | null }>): string[] => {
+  const codes = new Set<string>();
+  items.forEach((item) => {
+    const baseCode = String(item.item_code ?? "").trim();
+    if (baseCode && baseCode.toUpperCase() !== "ITEM") {
+      codes.add(baseCode);
+    }
+    const fields = item.metadata?.fields ?? {};
+    Object.entries(fields).forEach(([key, value]) => {
+      const normalized = normalizeKey(key);
+      if (normalized.includes("code")) {
+        const candidate = String(value ?? "").trim();
+        if (candidate) codes.add(candidate);
+      }
+    });
+  });
+  return Array.from(codes.values());
+};
 
 router.get("/", async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
@@ -508,6 +550,157 @@ router.delete(
     }
   }
 );
+
+router.post("/:projectId/compare", async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const userId = getUserId(req);
+    const projectId = req.params.projectId;
+    const project = await findProjectById(userId, projectId);
+    if (!project) {
+      return res.status(404).json({ message: "Project not found" });
+    }
+    const force = String(req.query.force ?? req.body?.force ?? "").toLowerCase();
+    const shouldForce = force === "1" || force === "true" || force === "yes";
+
+    if (!shouldForce) {
+      const cached = await ProjectComparisonModel.findOne({ userId, projectId })
+        .lean<ProjectComparisonDocument>()
+        .exec();
+      if (cached?.results?.length) {
+        return res.status(200).json({
+          results: cached.results,
+          stats: cached.stats ?? null,
+          cached: true,
+          updatedAt: cached.updatedAt,
+        });
+      }
+    }
+
+    const items = await ProjectItemModel.find({ userId, projectId }).exec();
+    const scheduleItems = items.filter((item) => item.source === "schedule");
+    const boqItems = items.filter((item) => item.source === "boq");
+    const drawingItems = items.filter((item) => item.source === "cad");
+
+    const scheduleCodes = extractScheduleCodes(scheduleItems);
+    const codeMatchers = scheduleCodes
+      .map((code) => ({ code, matcher: buildCodeMatcher(code) }))
+      .filter((entry) => entry.matcher !== null) as Array<{ code: string; matcher: RegExp }>;
+
+    const boqGroupMap = new Map<string, BoqCompareGroup>();
+    boqItems.forEach((item) => {
+      const itemCode = String(item.item_code ?? "").trim();
+      if (!itemCode || itemCode.toUpperCase() === "ITEM") return;
+      const description = String(item.description ?? "").trim();
+      if (!description) return;
+      const matchedCodes = codeMatchers
+        .filter(({ matcher }) => matcher.test(description.toUpperCase()))
+        .map(({ code }) => code);
+      if (matchedCodes.length === 0) return;
+
+      const fields = (item.metadata?.fields ?? {}) as Record<string, string>;
+      const qty = findBoqField(fields, ["qty", "quantity", "q'ty", "qnty"]);
+      const unit = findBoqField(fields, ["unit", "uom", "unit of measure"]);
+
+      matchedCodes.forEach((code) => {
+        const entry = boqGroupMap.get(code) ?? { item_code: code, entries: [] };
+        entry.entries.push({
+          description,
+          qty,
+          unit,
+        });
+        boqGroupMap.set(code, entry);
+      });
+    });
+
+    const boqGroups = Array.from(boqGroupMap.values());
+    const drawingGroupMap = new Map<string, DrawingCompareGroup>();
+    drawingItems.forEach((item) => {
+      const code = String(item.item_code ?? "").trim();
+      if (!code || code.toUpperCase() === "ITEM") return;
+      const detail = [item.description, item.notes]
+        .filter((value) => value && String(value).trim() && String(value).trim().toUpperCase() !== "N/A")
+        .join(" • ");
+      if (!detail.trim()) return;
+      const group = drawingGroupMap.get(code) ?? { item_code: code, details: [] };
+      if (!group.details.includes(detail)) {
+        group.details.push(detail);
+      }
+      drawingGroupMap.set(code, group);
+    });
+    const drawingGroups = Array.from(drawingGroupMap.values());
+
+    const statsPayload = {
+      scheduleCodes: scheduleCodes.length,
+      boqItems: boqItems.length,
+      drawingItems: drawingItems.length,
+      comparableItems: boqGroups.length,
+      chunks: 0,
+    };
+
+    if (boqGroups.length === 0) {
+      await ProjectComparisonModel.findOneAndUpdate(
+        { userId, projectId },
+        { results: [], stats: statsPayload },
+        { new: true, upsert: true }
+      ).exec();
+      return res.status(200).json({
+        results: [],
+        stats: statsPayload,
+        cached: false,
+      });
+    }
+
+    const shouldSplit = boqGroups.length > 30;
+    const chunks = shouldSplit
+      ? [boqGroups.slice(0, Math.ceil(boqGroups.length / 2)), boqGroups.slice(Math.ceil(boqGroups.length / 2))]
+      : [boqGroups];
+    statsPayload.chunks = chunks.length;
+
+    const normalizeCompareResult = (value: string): "matched" | "mismatch" => {
+      const normalized = value.trim().toLowerCase();
+      if (normalized === "mismatch" || normalized === "mismatched") return "mismatch";
+      return "matched";
+    };
+
+    const resultsByCode = new Map<string, CompareResult>();
+    await Promise.all(
+      chunks.map(async (chunk) => {
+        const codes = new Set(chunk.map((entry) => entry.item_code));
+        const relevantDrawings = drawingGroups.filter((entry) => codes.has(entry.item_code));
+        const response = await compareProjectItemsWithOpenAI(chunk, relevantDrawings);
+        response.results.forEach((result) => {
+          if (result?.item_code) {
+            resultsByCode.set(result.item_code, {
+              item_code: result.item_code,
+              result: normalizeCompareResult(result.result ?? ""),
+              reason: result.reason ?? "",
+            });
+          }
+        });
+      })
+    );
+
+    const orderedResults = boqGroups.map((group) => {
+      const existing = resultsByCode.get(group.item_code);
+      if (existing) return existing;
+      return { item_code: group.item_code, result: "matched", reason: "" };
+    });
+
+    await ProjectComparisonModel.findOneAndUpdate(
+      { userId, projectId },
+      { results: orderedResults, stats: statsPayload },
+      { new: true, upsert: true }
+    ).exec();
+
+    res.status(200).json({
+      results: orderedResults,
+      stats: statsPayload,
+      cached: false,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
 
 router.get(
   "/:projectId/stream",
