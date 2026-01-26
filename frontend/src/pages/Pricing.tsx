@@ -60,7 +60,10 @@ const parseNumber = (value: string | number | null | undefined): number => {
   if (typeof value === "number") return Number.isFinite(value) ? value : 0;
   const trimmed = value.trim();
   if (!trimmed) return 0;
-  const numberValue = Number(trimmed);
+  const cleaned = trimmed.replace(/,/g, "");
+  const match = cleaned.match(/-?\d+(\.\d+)?/);
+  if (!match) return 0;
+  const numberValue = Number(match[0]);
   return Number.isFinite(numberValue) ? numberValue : 0;
 };
 
@@ -269,6 +272,32 @@ export default function Pricing({
       })),
     [productivityBlocks]
   );
+
+  useEffect(() => {
+    if (productivityOptions.length === 0) return;
+    setSubItemsByItemId((current) => {
+      let changed = false;
+      const next: Record<string, PricingSubItem[]> = {};
+      Object.entries(current).forEach(([itemId, rows]) => {
+        const updatedRows = rows.map((row) => {
+          if (!row.productivityId) return row;
+          const match = productivityOptions.find((option) => option.id === row.productivityId);
+          if (!match) return row;
+          if (row.unitMh === match.unitMh && row.unitEquipRate === match.equipmentRate) {
+            return row;
+          }
+          changed = true;
+          return {
+            ...row,
+            unitMh: match.unitMh,
+            unitEquipRate: match.equipmentRate,
+          };
+        });
+        next[itemId] = updatedRows;
+      });
+      return changed ? next : current;
+    });
+  }, [productivityOptions]);
 
   const pricedItems = useMemo(
     () => sortedBoqItems.filter((item) => String(item.item_code ?? "").trim() !== "ITEM"),
@@ -539,7 +568,7 @@ export default function Pricing({
                 const unitRateWages = unitMh * mpHourlyRateValue;
                 const totalRateWages = unitRateWages * qtyValue;
                 const unitRateMaterials = parseNumber(row.materialsRate);
-                const totalRateMaterials = unitRateMaterials * qtyValue;
+                const totalRateMaterials = (unitRateMaterials + unitRateMaterials * poRateValue) * qtyValue;
                 const unitRateSubcon = parseNumber(row.subconRate);
                 const totalRateSubcon = unitRateSubcon * qtyValue;
                 const unitRateEquip = row.unitEquipRate;
