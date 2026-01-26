@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { v4 as uuidv4 } from "uuid";
 import type { PricingPayload, ProductivityRatesBlock, ProjectItem } from "../types";
 import { getPricing, getProductivityRates, savePricing } from "../services/api";
@@ -7,6 +8,11 @@ type PricingProps = {
   boqItems: ProjectItem[];
   projectName?: string;
   projectId?: string;
+  headerTop?: ReactNode;
+  initialPricing?: PricingPayload | null;
+  onPricingLoaded?: (payload: PricingPayload) => void;
+  onDirtyChange?: (isDirty: boolean) => void;
+  onRegisterSave?: (save: () => Promise<boolean>) => void;
 };
 
 type PricingSubItem = {
@@ -110,7 +116,16 @@ const computeEquipmentRateSum = (block: ProductivityRatesBlock): number => {
   }, 0);
 };
 
-export default function Pricing({ boqItems, projectName, projectId }: PricingProps) {
+export default function Pricing({
+  boqItems,
+  projectName,
+  projectId,
+  headerTop,
+  initialPricing,
+  onPricingLoaded,
+  onDirtyChange,
+  onRegisterSave,
+}: PricingProps) {
   const [percentage, setPercentage] = useState("10");
   const [idleText, setIdleText] = useState("idle time");
   const [poRate, setPoRate] = useState("8");
@@ -127,6 +142,33 @@ export default function Pricing({ boqItems, projectName, projectId }: PricingPro
   const [saving, setSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState("");
   const [saveError, setSaveError] = useState("");
+  const lastSavedSnapshotRef = useRef<string>("");
+  const pricingLoadedRef = useRef(false);
+  const lastProjectIdRef = useRef<string | undefined>(undefined);
+  const initializingRef = useRef(false);
+
+  const buildPricingPayload = useCallback(
+    (): PricingPayload => ({
+      percentage,
+      idleText,
+      poRate,
+      mpHourlyRate,
+      subItemsByItemId,
+      autoRowQtyByItemId,
+    }),
+    [percentage, idleText, poRate, mpHourlyRate, subItemsByItemId, autoRowQtyByItemId]
+  );
+
+  const applyPricingPayload = useCallback((payload: PricingPayload) => {
+    setPercentage(payload.percentage ?? "10");
+    setIdleText(payload.idleText ?? "idle time");
+    setPoRate(payload.poRate ?? "8");
+    if (payload.mpHourlyRate) {
+      setMpHourlyRate(payload.mpHourlyRate);
+    }
+    setSubItemsByItemId((payload.subItemsByItemId as Record<string, PricingSubItem[]>) ?? {});
+    setAutoRowQtyByItemId((payload.autoRowQtyByItemId as Record<string, string>) ?? {});
+  }, []);
 
   useEffect(() => {
     setLoadingRates(true);
@@ -143,24 +185,41 @@ export default function Pricing({ boqItems, projectName, projectId }: PricingPro
   }, []);
 
   useEffect(() => {
+    if (lastProjectIdRef.current !== projectId) {
+      lastProjectIdRef.current = projectId;
+      pricingLoadedRef.current = false;
+      lastSavedSnapshotRef.current = "";
+    }
     if (!projectId) return;
+    if (initialPricing && !pricingLoadedRef.current) {
+      initializingRef.current = true;
+      applyPricingPayload(initialPricing);
+      lastSavedSnapshotRef.current = JSON.stringify(initialPricing);
+      pricingLoadedRef.current = true;
+      onDirtyChange?.(false);
+      return;
+    }
+    if (pricingLoadedRef.current) return;
     setLoadingPricing(true);
     getPricing(projectId)
       .then((payload) => {
-        setPercentage(payload.percentage ?? "10");
-        setIdleText(payload.idleText ?? "idle time");
-        setPoRate(payload.poRate ?? "8");
-        if (payload.mpHourlyRate) {
-          setMpHourlyRate(payload.mpHourlyRate);
-        }
-        setSubItemsByItemId((payload.subItemsByItemId as Record<string, PricingSubItem[]>) ?? {});
-        setAutoRowQtyByItemId((payload.autoRowQtyByItemId as Record<string, string>) ?? {});
+        initializingRef.current = true;
+        applyPricingPayload(payload);
+        lastSavedSnapshotRef.current = JSON.stringify(payload);
+        pricingLoadedRef.current = true;
+        onPricingLoaded?.(payload);
+        onDirtyChange?.(false);
       })
       .catch(() => {
+        if (!lastSavedSnapshotRef.current) {
+          lastSavedSnapshotRef.current = JSON.stringify(buildPricingPayload());
+          onDirtyChange?.(false);
+        }
+        initializingRef.current = false;
         // ignore load errors; page can still be edited
       })
       .finally(() => setLoadingPricing(false));
-  }, [projectId]);
+  }, [projectId, initialPricing, applyPricingPayload, onDirtyChange, onPricingLoaded, buildPricingPayload]);
 
   const sortedBoqItems = useMemo(() => {
     return [...boqItems].sort((a, b) => {
@@ -237,6 +296,18 @@ export default function Pricing({ boqItems, projectName, projectId }: PricingPro
     });
   }, [pricedItems]);
 
+  useEffect(() => {
+    if (!initializingRef.current) return;
+    const defaultsReady = pricedItems.every(
+      (item) => subItemsByItemId[item.id] && autoRowQtyByItemId[item.id] !== undefined
+    );
+    if (!defaultsReady) return;
+    const payload = buildPricingPayload();
+    lastSavedSnapshotRef.current = JSON.stringify(payload);
+    onDirtyChange?.(false);
+    initializingRef.current = false;
+  }, [pricedItems, subItemsByItemId, autoRowQtyByItemId, buildPricingPayload, onDirtyChange]);
+
   const addSubItem = useCallback((itemId: string) => {
     setSubItemsByItemId((current) => ({
       ...current,
@@ -295,32 +366,40 @@ export default function Pricing({ boqItems, projectName, projectId }: PricingPro
   const poRateValue = parseNumber(poRate) / 100;
   const mpHourlyRateValue = parseNumber(mpHourlyRate);
 
-  const handleSave = useCallback(() => {
+  const handleSave = useCallback(async (): Promise<boolean> => {
     if (!projectId) {
       setSaveError("Save requires an active project.");
-      return;
+      return false;
     }
     setSaving(true);
     setSaveError("");
     setSaveMessage("");
-    const payload: PricingPayload = {
-      percentage,
-      idleText,
-      poRate,
-      mpHourlyRate,
-      subItemsByItemId,
-      autoRowQtyByItemId,
-    };
-    savePricing(projectId, payload)
-      .then(() => {
-        setSaveMessage("Saved.");
-        setTimeout(() => setSaveMessage(""), 3000);
-      })
-      .catch((error: unknown) => {
-        setSaveError((error as Error).message || "Failed to save pricing.");
-      })
-      .finally(() => setSaving(false));
-  }, [projectId, percentage, idleText, poRate, mpHourlyRate, subItemsByItemId, autoRowQtyByItemId]);
+    const payload = buildPricingPayload();
+    try {
+      await savePricing(projectId, payload);
+      lastSavedSnapshotRef.current = JSON.stringify(payload);
+      onPricingLoaded?.(payload);
+      onDirtyChange?.(false);
+      setSaveMessage("Saved.");
+      setTimeout(() => setSaveMessage(""), 3000);
+      return true;
+    } catch (error: unknown) {
+      setSaveError((error as Error).message || "Failed to save pricing.");
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  }, [projectId, buildPricingPayload, onPricingLoaded, onDirtyChange]);
+
+  useEffect(() => {
+    onRegisterSave?.(handleSave);
+  }, [handleSave, onRegisterSave]);
+
+  useEffect(() => {
+    const currentSnapshot = JSON.stringify(buildPricingPayload());
+    const isDirty = currentSnapshot !== lastSavedSnapshotRef.current;
+    onDirtyChange?.(isDirty);
+  }, [buildPricingPayload, onDirtyChange]);
 
   useEffect(() => {
     if (!activeRowId) return;
@@ -355,8 +434,9 @@ export default function Pricing({ boqItems, projectName, projectId }: PricingPro
   if (loadingRates || loadingPricing) {
     return (
       <section className="panel">
-        <div className="panel__header">
-          <div>
+        <div className="panel__header panel__header--review">
+          <div className="stepper-container">
+            {headerTop}
             <h2 className="section-title section-title--compact">Pricing</h2>
             <p className="eyebrow" style={{ opacity: 0.7, marginTop: "0.35rem" }}>
               {projectName ? `${projectName} • ` : ""}Loading pricing data...
@@ -372,8 +452,9 @@ export default function Pricing({ boqItems, projectName, projectId }: PricingPro
 
   return (
     <section className="panel">
-      <div className="panel__header">
-        <div>
+      <div className="panel__header panel__header--review">
+        <div className="stepper-container">
+          {headerTop}
           <h2 className="section-title section-title--compact">Pricing</h2>
           <p className="eyebrow" style={{ opacity: 0.7, marginTop: "0.35rem" }}>
             {projectName ? `${projectName} • ` : ""}Configure pricing inputs and build sub-items per BOQ line.

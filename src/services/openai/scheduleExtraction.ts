@@ -24,8 +24,8 @@ Output:
 - Return JSON only.
 - Structure: { "items": [ { ... } ] }.
 - Each item is one row from the table. Keep the output array in the same order as the table rows.
-- Always include a field named "CODE" for each row to represent the item name or code.
-- Use clear snake_case keys and include fields exactly as they appear in the source (e.g., CODE, item_name, description, dimensions, quantity, unit, location, notes).
+- Always include a field named "CODE" for each row to represent the item name or code (put the code as it is, no extra spaces).
+- Use clear snake_case keys and include fields exactly as they appear in the source (e.g., item_name, description, dimensions, quantity, unit, location).
 - If a field is not present for an item, use an empty string.
 - Do not invent values or assumptions.`;
 

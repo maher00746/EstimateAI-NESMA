@@ -2,12 +2,15 @@ import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
 import CadExtraction from "./pages/CadExtraction";
+import BoqFileReview from "./pages/BoqFileReview";
+import ScheduleFileReview from "./pages/ScheduleFileReview";
 import Pricing from "./pages/Pricing";
 import ProductivityRates from "./pages/ProductivityRates";
-import type { CadExtractionItem, ProjectFile, ProjectItem, ProjectLog, ProjectSummary } from "./types";
+import type { CadExtractionItem, PricingPayload, ProjectFile, ProjectItem, ProjectLog, ProjectSummary } from "./types";
 import {
   addProjectFileItem,
   createProject,
+  getPricing,
   listProjectFileItems,
   listProjectFiles,
   listProjectItems,
@@ -28,10 +31,15 @@ type AppPage =
   | "upload"
   | "extract"
   | "file-review"
+  | "schedule-review"
+  | "boq-review"
+  | "compare"
+  | "finalize"
   | "productivity-rates"
   | "pricing";
 
 type CadItemWithId = CadExtractionItem & { id: string };
+type EditableProjectItem = Pick<ProjectItem, "id" | "item_code" | "description" | "notes" | "box" | "metadata">;
 
 const PROJECT_STATUS_LABELS: Record<ProjectSummary["status"], string> = {
   in_progress: "In Progess",
@@ -97,6 +105,7 @@ export default function App() {
   const [feedback, setFeedback] = useState<string>("");
   const [notifications, setNotifications] = useState<Array<{ id: string; message: string }>>([]);
   const lastFileStatusRef = useRef<Map<string, ProjectFile["status"]>>(new Map());
+  const didRestoreStepRef = useRef(false);
   const [streamStatus, setStreamStatus] = useState<"connecting" | "connected" | "error">("connecting");
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [itemDrafts, setItemDrafts] = useState<Record<string, { item_code: string; description: string; notes: string }>>({});
@@ -106,6 +115,18 @@ export default function App() {
   const [activeBoqTab, setActiveBoqTab] = useState<string>("all");
   const [activeDrawingTab, setActiveDrawingTab] = useState<string>("all");
   const [activeScheduleTab, setActiveScheduleTab] = useState<string>("all");
+  const [pricingCacheByProject, setPricingCacheByProject] = useState<Record<string, PricingPayload | null>>({});
+  const [pricingDirty, setPricingDirty] = useState(false);
+  const pricingSaveRef = useRef<null | (() => Promise<boolean>)>(null);
+  const [unsavedDialogContext, setUnsavedDialogContext] = useState<"productivity" | "pricing" | null>(null);
+  const activePricingCache = activeProject ? pricingCacheByProject[activeProject.id] : null;
+  type ReviewAccordionKey = "projectFiles" | "boq" | "schedule" | "drawings";
+  const [openAccordions, setOpenAccordions] = useState<Record<ReviewAccordionKey, boolean>>({
+    projectFiles: true,
+    boq: false,
+    schedule: false,
+    drawings: false,
+  });
 
   const [pendingPageChange, setPendingPageChange] = useState<AppPage | null>(null);
   const [unsavedDialogOpen, setUnsavedDialogOpen] = useState(false);
@@ -114,15 +135,53 @@ export default function App() {
     (nextPage: AppPage) => {
       const isLeavingProductivity = activePage === "productivity-rates" && nextPage !== "productivity-rates";
       const isDirty = (window as typeof window & { __productivityDirty?: boolean }).__productivityDirty;
+      const isLeavingPricing = activePage === "pricing" && nextPage !== "pricing";
+      const hasPricingDirty = pricingDirty;
+      if (isLeavingPricing && hasPricingDirty) {
+        setPendingPageChange(nextPage);
+        setUnsavedDialogContext("pricing");
+        setUnsavedDialogOpen(true);
+        return;
+      }
       if (isLeavingProductivity && isDirty) {
         setPendingPageChange(nextPage);
+        setUnsavedDialogContext("productivity");
         setUnsavedDialogOpen(true);
         return;
       }
       setActivePage(nextPage);
     },
-    [activePage]
+    [activePage, pricingDirty]
   );
+
+  const handleUnsavedStay = useCallback(() => {
+    setUnsavedDialogOpen(false);
+    setPendingPageChange(null);
+    setUnsavedDialogContext(null);
+  }, []);
+
+  const handleUnsavedLeave = useCallback(() => {
+    if (pendingPageChange) {
+      setActivePage(pendingPageChange);
+    }
+    setPendingPageChange(null);
+    setUnsavedDialogOpen(false);
+    setUnsavedDialogContext(null);
+  }, [pendingPageChange]);
+
+  const handleUnsavedDiscard = useCallback(() => {
+    setPricingDirty(false);
+    handleUnsavedLeave();
+  }, [handleUnsavedLeave]);
+
+  const handleUnsavedSaveAndLeave = useCallback(async () => {
+    if (pricingSaveRef.current) {
+      const ok = await pricingSaveRef.current();
+      if (!ok) return;
+    }
+    setPricingDirty(false);
+    handleUnsavedLeave();
+  }, [handleUnsavedLeave]);
 
   const pushNotification = useCallback((message: string) => {
     const id = `${Date.now()}-${Math.random()}`;
@@ -155,11 +214,23 @@ export default function App() {
     if (files.length > 0) {
       setMaxStepReached((prev) => Math.max(prev, 1));
     }
-  }, []);
+    if (!pricingCacheByProject[projectId]) {
+      try {
+        const pricing = await getPricing(projectId);
+        setPricingCacheByProject((prev) => ({ ...prev, [projectId]: pricing }));
+      } catch {
+        // ignore missing pricing data
+      }
+    }
+  }, [pricingCacheByProject]);
 
   useEffect(() => {
     if (activeProject) {
       setProjectNameInput(activeProject.name);
+    }
+    if (!activeProject) {
+      didRestoreStepRef.current = false;
+      setPricingDirty(false);
     }
   }, [activeProject]);
 
@@ -344,11 +415,21 @@ export default function App() {
     }
   }, [activeProject, boqFile, drawings, scheduleFiles, projectNameInput, refreshProjectData, requestPageChange]);
 
+  const toggleAccordion = useCallback((key: ReviewAccordionKey) => {
+    setOpenAccordions((prev) => ({ ...prev, [key]: !prev[key] }));
+  }, []);
+
   const handleOpenFile = useCallback(async (file: ProjectFile) => {
     if (!activeProject) return;
     setPageLoadingMessage("Opening file…");
     setActiveFile(file);
-    requestPageChange("file-review");
+    requestPageChange(
+      file.fileType === "drawing"
+        ? "file-review"
+        : file.fileType === "schedule"
+          ? "schedule-review"
+          : "boq-review"
+    );
     try {
       const items = await listProjectFileItems(activeProject.id, file.id);
       setFileItems(items);
@@ -434,7 +515,7 @@ export default function App() {
   }, [activeProject, deleteItemTarget]);
 
   const handleSaveFileItems = useCallback(
-    async (items: CadItemWithId[]) => {
+    async (items: EditableProjectItem[]) => {
       if (!activeProject || !activeFile) return;
 
       const snapshotById = new Map(fileItemsSnapshot.map((item) => [item.id, item]));
@@ -454,17 +535,21 @@ export default function App() {
           if (!existing) return Promise.resolve();
           const boxChanged =
             JSON.stringify(existing.box ?? null) !== JSON.stringify(item.box ?? null);
+          const metadataChanged =
+            JSON.stringify(existing.metadata ?? null) !== JSON.stringify(item.metadata ?? null);
           const changed =
             existing.item_code !== item.item_code ||
             existing.description !== item.description ||
             existing.notes !== item.notes ||
-            boxChanged;
+            boxChanged ||
+            metadataChanged;
           if (!changed) return Promise.resolve();
           return updateProjectItem(activeProject.id, item.id, {
             item_code: item.item_code,
             description: item.description,
             notes: item.notes,
             box: item.box ?? null,
+            metadata: item.metadata ?? null,
           });
         })
       );
@@ -476,6 +561,7 @@ export default function App() {
             description: item.description || "N/A",
             notes: item.notes || "N/A",
             box: item.box ?? null,
+            metadata: item.metadata ?? null,
           })
         )
       );
@@ -510,6 +596,11 @@ export default function App() {
     if (activePage === "upload") return "upload";
     if (activePage === "extract") return "review";
     if (activePage === "file-review") return "review";
+    if (activePage === "schedule-review") return "review";
+    if (activePage === "boq-review") return "review";
+    if (activePage === "compare") return "compare";
+    if (activePage === "finalize") return "finalize";
+    if (activePage === "pricing") return "pricing";
     return null;
   }, [activePage]);
 
@@ -528,7 +619,25 @@ export default function App() {
   const stepPageMap: Partial<Record<string, AppPage>> = {
     upload: "upload",
     review: "extract",
+    compare: "compare",
+    finalize: "finalize",
+    pricing: "pricing",
   };
+
+  useEffect(() => {
+    if (!activeProject || didRestoreStepRef.current) return;
+    const storedStep = localStorage.getItem(`project:${activeProject.id}:lastStep`);
+    const targetPage = storedStep ? stepPageMap[storedStep] : null;
+    if (targetPage) {
+      setActivePage(targetPage);
+    }
+    didRestoreStepRef.current = true;
+  }, [activeProject, stepPageMap]);
+
+  useEffect(() => {
+    if (!activeProject || !currentStepId) return;
+    localStorage.setItem(`project:${activeProject.id}:lastStep`, currentStepId);
+  }, [activeProject, currentStepId]);
 
   const renderStepper = () => (
     <div className={`stepper ${isSidebarOpen ? "stepper--compact" : "stepper--wide"}`}>
@@ -609,6 +718,18 @@ export default function App() {
     () => projectItems.filter((item) => item.source === "boq"),
     [projectItems]
   );
+  useEffect(() => {
+    if (!activeProject) return;
+    let reached = 0;
+    if (projectFiles.length > 0) reached = Math.max(reached, 1);
+    const hasBoq = boqItems.length > 0;
+    const hasDrawing = drawingItems.length > 0;
+    const hasSchedule = scheduleItems.length > 0;
+    if (hasBoq && (hasDrawing || hasSchedule)) reached = Math.max(reached, 2);
+    if (projectItems.length > 0) reached = Math.max(reached, 3);
+    if (activePricingCache) reached = Math.max(reached, 4);
+    setMaxStepReached((prev) => Math.max(prev, reached));
+  }, [activeProject, projectFiles.length, boqItems.length, drawingItems.length, scheduleItems.length, projectItems.length, activePricingCache]);
   const drawingTabs = useMemo(() => {
     const drawingFiles = projectFiles.filter((file) => file.fileType === "drawing");
     return [
@@ -665,7 +786,11 @@ export default function App() {
     });
   }, [activeBoqTabId, boqItems]);
   const filteredBoqItemCount = useMemo(
-    () => filteredBoqItems.filter((item) => String(item.item_code ?? "").trim() !== "").length,
+    () =>
+      filteredBoqItems.filter((item) => {
+        const code = String(item.item_code ?? "").trim();
+        return code !== "" && !isItemPlaceholder(code);
+      }).length,
     [filteredBoqItems]
   );
   const boqColumns = useMemo(() => ["Item", "Description", "QTY", "Unit", "Rate", "Amount"], []);
@@ -694,7 +819,8 @@ export default function App() {
         }
       });
     });
-    return columns.length > 0 ? columns : ["Item", "Description", "Notes"];
+    const base = columns.length > 0 ? columns : ["Item", "Description"];
+    return base.filter((col) => normalizeColumn(col) !== "notes");
   }, [filteredScheduleItems]);
   const getScheduleCellValue = (item: ProjectItem, column: string) => {
     const fields = item.metadata?.fields ?? {};
@@ -809,7 +935,14 @@ export default function App() {
         </div>
       )}
 
-      <main className="content" style={activePage === "file-review" ? { padding: 0, maxWidth: "none", height: "100vh", overflow: "hidden" } : undefined}>
+      <main
+        className="content"
+        style={
+          activePage === "file-review" || activePage === "schedule-review"
+            ? { padding: 0, maxWidth: "none", height: "100vh", overflow: "hidden" }
+            : undefined
+        }
+      >
         {(openingProject || pageLoadingMessage) && (
           <div className="processing-overlay">
             <div className="processing-indicator">
@@ -973,7 +1106,21 @@ export default function App() {
         )}
 
         {activePage === "pricing" && (
-          <Pricing boqItems={boqItems} projectName={activeProject?.name} projectId={activeProject?.id} />
+          <Pricing
+            boqItems={boqItems}
+            projectName={activeProject?.name}
+            projectId={activeProject?.id}
+            headerTop={renderStepper()}
+            initialPricing={activePricingCache}
+            onPricingLoaded={(payload) => {
+              if (!activeProject) return;
+              setPricingCacheByProject((prev) => ({ ...prev, [activeProject.id]: payload }));
+            }}
+            onDirtyChange={(dirty) => setPricingDirty(dirty)}
+            onRegisterSave={(save) => {
+              pricingSaveRef.current = save;
+            }}
+          />
         )}
 
         {activePage === "upload" && activeProject && (
@@ -1078,24 +1225,17 @@ export default function App() {
             <div className="panel__header panel__header--review">
               <div className="stepper-container">
                 {renderStepper()}
-                <h2 style={{ marginTop: "0.5rem" }}>Review Project Files</h2>
+                <h2 style={{ marginTop: "0.5rem" }}>Review Files and Extractions</h2>
               </div>
             </div>
             <div className="panel__body">
-              <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginBottom: "1rem", flexWrap: "wrap" }}>
+              <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "1rem" }}>
                 <button
                   type="button"
                   className="btn-secondary btn-compact btn-muted"
-                  onClick={() => setAddFilesOpen(true)}
+                  onClick={() => requestPageChange("compare")}
                 >
-                  Add More Files
-                </button>
-                <button
-                  type="button"
-                  className="btn-secondary btn-compact btn-muted"
-                  onClick={() => requestPageChange("pricing")}
-                >
-                  Go to Pricing
+                  Go to Compare
                 </button>
               </div>
               {notifications.length > 0 && (
@@ -1107,380 +1247,490 @@ export default function App() {
                   ))}
                 </div>
               )}
-              <div className="table-wrapper" style={{ marginBottom: "1.5rem" }}>
-                <table className="kb-table">
-                  <thead>
-                    <tr>
-                      <th>No</th>
-                      <th>File Name</th>
-                      <th>Type</th>
-                      <th>Status</th>
-                      <th>Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {projectFiles.length === 0 ? (
-                      <tr className="kb-table__row">
-                        <td colSpan={5} style={{ textAlign: "center", color: "rgba(227,233,255,0.7)" }}>
-                          No files uploaded yet.
-                        </td>
-                      </tr>
-                    ) : (
-                      projectFiles.map((file) => (
-                        <tr key={file.id} className="kb-table__row">
-                          <td>{renderCell(file.fileNo)}</td>
-                          <td className="kb-table__filename">{renderCell(file.fileName)}</td>
-                          <td>{renderCell(file.fileType)}</td>
-                          <td>{renderFileStatus(file.status)}</td>
-                          <td>
-                            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-                              {file.fileType === "drawing" ? (
-                                <button type="button" className="btn-secondary" onClick={() => void handleOpenFile(file)}>
-                                  Go to File
-                                </button>
-                              ) : (
-                                <span className="status">
-                                  {file.fileType === "schedule" ? "Schedule" : "BOQ"}
-                                </span>
-                              )}
-                              {file.status === "failed" && (
-                                <button
-                                  type="button"
-                                  className="btn-secondary"
-                                  onClick={() => void handleRetryFile(file)}
-                                  disabled={retryingFileId === file.id}
-                                >
-                                  {retryingFileId === file.id ? "Retrying…" : "Retry"}
-                                </button>
-                              )}
-                              <button
-                                type="button"
-                                className="btn-secondary"
-                                onClick={() => setDeleteFileTarget(file)}
-                                disabled={deletingFile && deleteFileTarget?.id === file.id}
-                              >
-                                {deletingFile && deleteFileTarget?.id === file.id ? "Deleting…" : "Delete"}
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
-
-              <div>
-                <h3 style={{ marginTop: 0 }}>Schedule Items</h3>
-                {scheduleItems.length === 0 ? (
-                  <div className="status" style={{ padding: "0.75rem", background: "rgba(255,255,255,0.04)" }}>
-                    No schedule items extracted yet.
-                  </div>
-                ) : (
-                  <div>
-                    <div className="tabs">
-                      {scheduleTabs.map((tab) => (
-                        <button
-                          key={tab.id}
-                          type="button"
-                          className={`tab ${activeScheduleTabId === tab.id ? "is-active" : ""}`}
-                          onClick={() => setActiveScheduleTab(tab.id)}
-                        >
-                          {tab.label}
-                        </button>
-                      ))}
+              <div className="pricing-accordion">
+                <div className={`pricing-accordion__card ${openAccordions.projectFiles ? "is-open" : ""}`}>
+                  <button
+                    type="button"
+                    className="pricing-accordion__header"
+                    onClick={() => toggleAccordion("projectFiles")}
+                    aria-expanded={openAccordions.projectFiles}
+                    aria-controls="review-project-files-panel"
+                  >
+                    <div>
+                      <h3 style={{ margin: 0 }}>Project Files</h3>
+                      <span className="eyebrow">{projectFiles.length} file(s)</span>
                     </div>
-                    <div className="table-wrapper items-table-scroll">
-                      <table className="matches-table boq-table">
-                        <thead>
-                          <tr>
-                            {scheduleColumns.map((col) => (
-                              <th key={col}>{col}</th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {filteredScheduleItems.length === 0 ? (
-                            <tr className="matches-table__row">
-                              <td colSpan={scheduleColumns.length} style={{ textAlign: "center", color: "rgba(227,233,255,0.7)" }}>
-                                No schedule items for this file.
-                              </td>
-                            </tr>
-                          ) : (
-                            filteredScheduleItems.map((item) => (
-                              <tr key={item.id} className="matches-table__row">
-                                {scheduleColumns.map((col) => (
-                                  <td key={`${item.id}-${col}`}>{renderCell(getScheduleCellValue(item, col))}</td>
-                                ))}
-                              </tr>
-                            ))
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div style={{ marginTop: "1.5rem" }}>
-                <h3 style={{ marginTop: 0 }}>Drawing Details</h3>
-                <div className="tabs">
-                  {drawingTabs.map((tab) => (
-                    <button
-                      key={tab.id}
-                      type="button"
-                      className={`tab ${activeDrawingTabId === tab.id ? "is-active" : ""}`}
-                      onClick={() => setActiveDrawingTab(tab.id)}
+                    <svg
+                      className={`pricing-accordion__chevron ${openAccordions.projectFiles ? "is-open" : ""}`}
+                      width="20"
+                      height="20"
+                      viewBox="0 0 20 20"
+                      aria-hidden="true"
                     >
-                      {tab.label}
-                    </button>
-                  ))}
-                </div>
-                <div className="table-wrapper items-table-scroll">
-                  <table className="matches-table">
-                    <thead>
-                      <tr>
-                        <th>File No</th>
-                        <th>File Name</th>
-                        <th>Item Code</th>
-                        <th>Description</th>
-                        <th>Notes</th>
-                        <th>Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredDrawingItems.length === 0 ? (
-                        <tr className="matches-table__row">
-                          <td colSpan={6} style={{ textAlign: "center", color: "rgba(227,233,255,0.7)" }}>
-                            No drawing details extracted yet.
-                          </td>
-                        </tr>
-                      ) : (
-                        groupedDrawingItems.flatMap(([code, group]) => {
-                          const groupRows: ReactNode[] = [
-                            (
-                              <tr key={`drawing-group-${code}`} className="boq-group-row">
-                                <td colSpan={6}>{code}</td>
+                      <path d="M5 8l5 5 5-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                    </svg>
+                  </button>
+                  {openAccordions.projectFiles && (
+                    <div className="pricing-accordion__panel" id="review-project-files-panel">
+                      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "0.75rem" }}>
+                        <button
+                          type="button"
+                          className="btn-secondary btn-compact btn-muted"
+                          onClick={() => setAddFilesOpen(true)}
+                        >
+                          Add More Files
+                        </button>
+                      </div>
+                      <div className="table-wrapper" style={{ margin: 0, maxWidth: "100%", maxHeight: "320px" }}>
+                        <table className="kb-table">
+                          <thead>
+                            <tr>
+                              <th>No</th>
+                              <th>File Name</th>
+                              <th>Type</th>
+                              <th>Status</th>
+                              <th>Action</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {projectFiles.length === 0 ? (
+                              <tr className="kb-table__row">
+                                <td colSpan={5} style={{ textAlign: "center", color: "rgba(227,233,255,0.7)" }}>
+                                  No files uploaded yet.
+                                </td>
                               </tr>
-                            ),
-                          ];
-                          group.forEach((item) => {
-                            const isEditing = editingItemId === item.id;
-                            const draft = itemDrafts[item.id];
-                            const hideNonDescription = isItemPlaceholder(item.item_code);
-                            groupRows.push(
-                              <tr key={item.id} className="matches-table__row">
-                                <td>{hideNonDescription ? renderEmptyCell() : renderCell(item.fileNo)}</td>
-                                <td>{hideNonDescription ? renderEmptyCell() : renderCell(item.fileName)}</td>
-                                <td>
-                                  {isEditing ? (
-                                    <input
-                                      type="text"
-                                      value={draft?.item_code ?? ""}
-                                      onChange={(event) => handleItemDraftChange(item.id, "item_code", event.target.value)}
-                                    />
-                                  ) : (
-                                    hideNonDescription ? renderEmptyCell() : renderItemCodeCell(item.item_code)
-                                  )}
-                                </td>
-                                <td>
-                                  {isEditing ? (
-                                    <input
-                                      type="text"
-                                      value={draft?.description ?? ""}
-                                      onChange={(event) => handleItemDraftChange(item.id, "description", event.target.value)}
-                                    />
-                                  ) : (
-                                    renderCell(item.description)
-                                  )}
-                                </td>
-                                <td>
-                                  {isEditing ? (
-                                    <input
-                                      type="text"
-                                      value={draft?.notes ?? ""}
-                                      onChange={(event) => handleItemDraftChange(item.id, "notes", event.target.value)}
-                                    />
-                                  ) : (
-                                    hideNonDescription ? renderEmptyCell() : renderCell(item.notes)
-                                  )}
-                                </td>
-                                <td>
-                                  <div style={{ display: "flex", gap: "0.5rem", flexWrap: "nowrap", alignItems: "center" }}>
-                                    {isEditing ? (
-                                      <>
+                            ) : (
+                              projectFiles.map((file) => (
+                                <tr key={file.id} className="kb-table__row">
+                                  <td>{renderCell(file.fileNo)}</td>
+                                  <td className="kb-table__filename">{renderCell(file.fileName)}</td>
+                                  <td>{renderCell(file.fileType)}</td>
+                                  <td>{renderFileStatus(file.status)}</td>
+                                  <td>
+                                    <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                              <button type="button" className="btn-secondary" onClick={() => void handleOpenFile(file)}>
+                                Go to File
+                              </button>
+                                      {file.status === "failed" && (
                                         <button
                                           type="button"
-                                          className="btn-secondary btn-icon"
-                                          onClick={() => void handleSaveItem(item.id)}
-                                          disabled={savingItemId === item.id}
-                                          aria-label="Save item"
-                                          title="Save"
+                                          className="btn-secondary"
+                                          onClick={() => void handleRetryFile(file)}
+                                          disabled={retryingFileId === file.id}
                                         >
-                                          {savingItemId === item.id ? (
-                                            <svg viewBox="0 0 20 20" aria-hidden="true">
-                                              <circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" strokeWidth="2" strokeDasharray="40" strokeDashoffset="16" />
-                                            </svg>
-                                          ) : (
-                                            <svg viewBox="0 0 20 20" aria-hidden="true">
-                                              <path d="M4 10l4 4 8-8" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                                            </svg>
-                                          )}
+                                          {retryingFileId === file.id ? "Retrying…" : "Retry"}
                                         </button>
-                                        <button
-                                          type="button"
-                                          className="btn-secondary btn-icon"
-                                          onClick={() => handleCancelEditItem(item.id)}
-                                          aria-label="Cancel edit"
-                                          title="Cancel"
-                                        >
-                                          <svg viewBox="0 0 20 20" aria-hidden="true">
-                                            <path d="M5 5l10 10M15 5l-10 10" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                                          </svg>
-                                        </button>
-                                      </>
-                                    ) : (
+                                      )}
                                       <button
                                         type="button"
-                                        className="btn-secondary btn-icon"
-                                        onClick={() => handleEditItem(item)}
-                                        aria-label="Edit item"
-                                        title="Edit"
+                                        className="btn-secondary"
+                                        onClick={() => setDeleteFileTarget(file)}
+                                        disabled={deletingFile && deleteFileTarget?.id === file.id}
                                       >
-                                        <svg viewBox="0 0 20 20" aria-hidden="true">
-                                          <path d="M4 13.5V16h2.5L15 7.5 12.5 5 4 13.5z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-                                          <path d="M11.5 6l2.5 2.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-                                        </svg>
+                                        {deletingFile && deleteFileTarget?.id === file.id ? "Deleting…" : "Delete"}
                                       </button>
-                                    )}
-                                    <button
-                                      type="button"
-                                      className="btn-secondary btn-icon"
-                                      onClick={() => setDeleteItemTarget(item)}
-                                      disabled={deletingItemId === item.id}
-                                      aria-label="Delete item"
-                                      title="Delete"
-                                    >
-                                      {deletingItemId === item.id ? (
-                                        <svg viewBox="0 0 20 20" aria-hidden="true">
-                                          <circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" strokeWidth="2" strokeDasharray="40" strokeDashoffset="16" />
-                                        </svg>
-                                      ) : (
-                                        <svg viewBox="0 0 20 20" aria-hidden="true">
-                                          <path d="M6 6h8l-1 10H7L6 6z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-                                          <path d="M4 6h12M8 6V4h4v2" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-                                        </svg>
-                                      )}
-                                    </button>
-                                  </div>
-                                </td>
-                              </tr>
-                            );
-                          });
-                          return groupRows;
-                        })
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              <div style={{ marginTop: "1.5rem" }}>
-                <h3 style={{ marginTop: 0 }}>BOQ Items ({filteredBoqItemCount})</h3>
-                {boqItems.length === 0 ? (
-                  <div className="status" style={{ padding: "0.75rem", background: "rgba(255,255,255,0.04)" }}>
-                    No BOQ items extracted yet.
-                  </div>
-                ) : (
-                  <div>
-                    <div className="tabs">
-                      {boqTabs.map((tab) => (
-                        <button
-                          key={tab.id}
-                          type="button"
-                          className={`tab ${activeBoqTabId === tab.id ? "is-active" : ""}`}
-                          onClick={() => setActiveBoqTab(tab.id)}
-                        >
-                          {tab.label}
-                        </button>
-                      ))}
+                                    </div>
+                                  </td>
+                                </tr>
+                              ))
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
-                    <div className="table-wrapper items-table-scroll">
-                      <table className="matches-table boq-table">
-                        <thead>
-                          <tr>
-                            {boqColumns.map((col) => (
-                              <th key={col}>{col}</th>
+                  )}
+                </div>
+
+                <div className={`pricing-accordion__card ${openAccordions.boq ? "is-open" : ""}`}>
+                  <button
+                    type="button"
+                    className="pricing-accordion__header"
+                    onClick={() => toggleAccordion("boq")}
+                    aria-expanded={openAccordions.boq}
+                    aria-controls="review-boq-panel"
+                  >
+                    <div>
+                      <h3 style={{ margin: 0 }}>BOQ Items</h3>
+                      <span className="eyebrow">{filteredBoqItemCount} item(s)</span>
+                    </div>
+                    <svg
+                      className={`pricing-accordion__chevron ${openAccordions.boq ? "is-open" : ""}`}
+                      width="20"
+                      height="20"
+                      viewBox="0 0 20 20"
+                      aria-hidden="true"
+                    >
+                      <path d="M5 8l5 5 5-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                    </svg>
+                  </button>
+                  {openAccordions.boq && (
+                    <div className="pricing-accordion__panel" id="review-boq-panel">
+                      {boqItems.length === 0 ? (
+                        <div className="status" style={{ padding: "0.75rem", background: "rgba(255,255,255,0.04)" }}>
+                          No BOQ items extracted yet.
+                        </div>
+                      ) : (
+                        <div>
+                          <div className="tabs">
+                            {boqTabs.map((tab) => (
+                              <button
+                                key={tab.id}
+                                type="button"
+                                className={`tab ${activeBoqTabId === tab.id ? "is-active" : ""}`}
+                                onClick={() => setActiveBoqTab(tab.id)}
+                              >
+                                {tab.label}
+                              </button>
                             ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {filteredBoqItems.length === 0 ? (
-                            <tr className="matches-table__row">
-                              <td colSpan={boqColumns.length} style={{ textAlign: "center", color: "rgba(227,233,255,0.7)" }}>
-                                No items for this sheet.
-                              </td>
-                            </tr>
-                          ) : (() => {
-                            const rows: ReactNode[] = [];
-                            let lastCategory = "";
-                            let lastSubcategory = "";
-                            filteredBoqItems.forEach((item) => {
-                              const category = item.metadata?.category || "Uncategorized";
-                              const subcategory = item.metadata?.subcategory || "";
-                              if (category !== lastCategory) {
-                                rows.push(
-                                  <tr key={`cat-${category}-${item.id}`} className="boq-group-row">
-                                    <td colSpan={boqColumns.length}>{category}</td>
-                                  </tr>
-                                );
-                                lastCategory = category;
-                                lastSubcategory = "";
-                              }
-                              if (subcategory && subcategory !== lastSubcategory) {
-                                rows.push(
-                                  <tr key={`sub-${category}-${subcategory}-${item.id}`} className="boq-subgroup-row">
-                                    <td colSpan={boqColumns.length}>{subcategory}</td>
-                                  </tr>
-                                );
-                                lastSubcategory = subcategory;
-                              }
-                              const itemCode = (item.item_code ?? "").trim();
-                              const highlightItemCode = /^[A-Z]$/.test(itemCode);
-                              const hideNonDescription = isItemPlaceholder(item.item_code);
-                              rows.push(
-                                <tr
-                                  key={item.id}
-                                  className="matches-table__row"
-                                  style={highlightItemCode ? { color: "#72fcd1" } : undefined}
-                                >
+                          </div>
+                          <div className="table-wrapper items-table-scroll" style={{ margin: 0 }}>
+                            <table className="matches-table boq-table">
+                              <thead>
+                                <tr>
                                   {boqColumns.map((col) => (
-                                    <td key={`${item.id}-${col}`}>
-                                      {(() => {
-                                        const normalizedCol = normalizeColumn(col);
-                                        if (normalizedCol === "description") {
-                                          return renderCell(getBoqCellValue(item, col));
-                                        }
-                                        if (hideNonDescription) {
-                                          return renderEmptyCell();
-                                        }
-                                        if (normalizedCol === "item") {
-                                          return renderItemCodeCell(item.item_code);
-                                        }
-                                        return renderCell(getBoqCellValue(item, col));
-                                      })()}
-                                    </td>
+                                    <th key={col}>{col}</th>
                                   ))}
                                 </tr>
-                              );
-                            });
-                            return rows;
-                          })()}
-                        </tbody>
-                      </table>
+                              </thead>
+                              <tbody>
+                                {filteredBoqItems.length === 0 ? (
+                                  <tr className="matches-table__row">
+                                    <td colSpan={boqColumns.length} style={{ textAlign: "center", color: "rgba(227,233,255,0.7)" }}>
+                                      No items for this sheet.
+                                    </td>
+                                  </tr>
+                                ) : (() => {
+                                  const rows: ReactNode[] = [];
+                                  let lastCategory = "";
+                                  let lastSubcategory = "";
+                                  filteredBoqItems.forEach((item) => {
+                                    const category = item.metadata?.category || "Uncategorized";
+                                    const subcategory = item.metadata?.subcategory || "";
+                                    if (category !== lastCategory) {
+                                      rows.push(
+                                        <tr key={`cat-${category}-${item.id}`} className="boq-group-row">
+                                          <td colSpan={boqColumns.length}>{category}</td>
+                                        </tr>
+                                      );
+                                      lastCategory = category;
+                                      lastSubcategory = "";
+                                    }
+                                    if (subcategory && subcategory !== lastSubcategory) {
+                                      rows.push(
+                                        <tr key={`sub-${category}-${subcategory}-${item.id}`} className="boq-subgroup-row">
+                                          <td colSpan={boqColumns.length}>{subcategory}</td>
+                                        </tr>
+                                      );
+                                      lastSubcategory = subcategory;
+                                    }
+                                    const itemCode = (item.item_code ?? "").trim();
+                                    const highlightItemCode = /^[A-Z]$/.test(itemCode);
+                                    const hideNonDescription = isItemPlaceholder(item.item_code);
+                                    rows.push(
+                                      <tr
+                                        key={item.id}
+                                        className="matches-table__row"
+                                        style={highlightItemCode ? { color: "#72fcd1" } : undefined}
+                                      >
+                                        {boqColumns.map((col) => (
+                                          <td key={`${item.id}-${col}`}>
+                                            {(() => {
+                                              const normalizedCol = normalizeColumn(col);
+                                              if (normalizedCol === "description") {
+                                                return renderCell(getBoqCellValue(item, col));
+                                              }
+                                              if (hideNonDescription) {
+                                                return renderEmptyCell();
+                                              }
+                                              if (normalizedCol === "item") {
+                                                return renderItemCodeCell(item.item_code);
+                                              }
+                                              return renderCell(getBoqCellValue(item, col));
+                                            })()}
+                                          </td>
+                                        ))}
+                                      </tr>
+                                    );
+                                  });
+                                  return rows;
+                                })()}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
                     </div>
-                  </div>
-                )}
+                  )}
+                </div>
+
+                <div className={`pricing-accordion__card ${openAccordions.schedule ? "is-open" : ""}`}>
+                  <button
+                    type="button"
+                    className="pricing-accordion__header"
+                    onClick={() => toggleAccordion("schedule")}
+                    aria-expanded={openAccordions.schedule}
+                    aria-controls="review-schedule-panel"
+                  >
+                    <div>
+                      <h3 style={{ margin: 0 }}>Schedule Items</h3>
+                      <span className="eyebrow">{scheduleItems.length} item(s)</span>
+                    </div>
+                    <svg
+                      className={`pricing-accordion__chevron ${openAccordions.schedule ? "is-open" : ""}`}
+                      width="20"
+                      height="20"
+                      viewBox="0 0 20 20"
+                      aria-hidden="true"
+                    >
+                      <path d="M5 8l5 5 5-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                    </svg>
+                  </button>
+                  {openAccordions.schedule && (
+                    <div className="pricing-accordion__panel" id="review-schedule-panel">
+                      {scheduleItems.length === 0 ? (
+                        <div className="status" style={{ padding: "0.75rem", background: "rgba(255,255,255,0.04)" }}>
+                          No schedule items extracted yet.
+                        </div>
+                      ) : (
+                        <div>
+                          <div className="tabs">
+                            {scheduleTabs.map((tab) => (
+                              <button
+                                key={tab.id}
+                                type="button"
+                                className={`tab ${activeScheduleTabId === tab.id ? "is-active" : ""}`}
+                                onClick={() => setActiveScheduleTab(tab.id)}
+                              >
+                                {tab.label}
+                              </button>
+                            ))}
+                          </div>
+                          <div className="table-wrapper items-table-scroll" style={{ margin: 0 }}>
+                            <table className="matches-table boq-table">
+                              <thead>
+                                <tr>
+                                  {scheduleColumns.map((col) => {
+                                    const normalizedCol = normalizeColumn(col);
+                                    const isCodeCol =
+                                      normalizedCol === "code" || normalizedCol === "item code" || normalizedCol === "item";
+                                    return (
+                                      <th
+                                        key={col}
+                                        style={isCodeCol ? { minWidth: "140px" } : undefined}
+                                      >
+                                        {col}
+                                      </th>
+                                    );
+                                  })}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {filteredScheduleItems.length === 0 ? (
+                                  <tr className="matches-table__row">
+                                    <td colSpan={scheduleColumns.length} style={{ textAlign: "center", color: "rgba(227,233,255,0.7)" }}>
+                                      No schedule items for this file.
+                                    </td>
+                                  </tr>
+                                ) : (
+                                  filteredScheduleItems.map((item) => (
+                                    <tr key={item.id} className="matches-table__row">
+                                      {scheduleColumns.map((col) => {
+                                        const normalizedCol = normalizeColumn(col);
+                                        const isCodeCol =
+                                          normalizedCol === "code" || normalizedCol === "item code" || normalizedCol === "item";
+                                        return (
+                                          <td
+                                            key={`${item.id}-${col}`}
+                                            style={isCodeCol ? { minWidth: "140px" } : undefined}
+                                          >
+                                            {renderCell(getScheduleCellValue(item, col))}
+                                          </td>
+                                        );
+                                      })}
+                                    </tr>
+                                  ))
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <div className={`pricing-accordion__card ${openAccordions.drawings ? "is-open" : ""}`}>
+                  <button
+                    type="button"
+                    className="pricing-accordion__header"
+                    onClick={() => toggleAccordion("drawings")}
+                    aria-expanded={openAccordions.drawings}
+                    aria-controls="review-drawings-panel"
+                  >
+                    <div>
+                      <h3 style={{ margin: 0 }}>Drawing Details</h3>
+                      <span className="eyebrow">{drawingItems.length} item(s)</span>
+                    </div>
+                    <svg
+                      className={`pricing-accordion__chevron ${openAccordions.drawings ? "is-open" : ""}`}
+                      width="20"
+                      height="20"
+                      viewBox="0 0 20 20"
+                      aria-hidden="true"
+                    >
+                      <path d="M5 8l5 5 5-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                    </svg>
+                  </button>
+                  {openAccordions.drawings && (
+                    <div className="pricing-accordion__panel" id="review-drawings-panel">
+                      <div className="tabs">
+                        {drawingTabs.map((tab) => (
+                          <button
+                            key={tab.id}
+                            type="button"
+                            className={`tab ${activeDrawingTabId === tab.id ? "is-active" : ""}`}
+                            onClick={() => setActiveDrawingTab(tab.id)}
+                          >
+                            {tab.label}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="table-wrapper items-table-scroll" style={{ margin: 0 }}>
+                        <table className="matches-table">
+                          <thead>
+                            <tr>
+                              <th>File No</th>
+                              <th>Item Code</th>
+                              <th style={{ minWidth: "260px" }}>Description</th>
+                              <th>Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {filteredDrawingItems.length === 0 ? (
+                              <tr className="matches-table__row">
+                                <td colSpan={4} style={{ textAlign: "center", color: "rgba(227,233,255,0.7)" }}>
+                                  No drawing details extracted yet.
+                                </td>
+                              </tr>
+                            ) : (
+                              groupedDrawingItems.flatMap(([code, group]) => {
+                                const groupRows: ReactNode[] = [
+                                  (
+                                    <tr key={`drawing-group-${code}`} className="boq-group-row">
+                                <td colSpan={4}>{code}</td>
+                                    </tr>
+                                  ),
+                                ];
+                                group.forEach((item) => {
+                                  const isEditing = editingItemId === item.id;
+                                  const draft = itemDrafts[item.id];
+                                  const hideNonDescription = isItemPlaceholder(item.item_code);
+                                  groupRows.push(
+                                    <tr key={item.id} className="matches-table__row">
+                                      <td>{hideNonDescription ? renderEmptyCell() : renderCell(item.fileNo)}</td>
+                                      <td>
+                                        {isEditing ? (
+                                          <input
+                                            type="text"
+                                            value={draft?.item_code ?? ""}
+                                            onChange={(event) => handleItemDraftChange(item.id, "item_code", event.target.value)}
+                                          />
+                                        ) : (
+                                          hideNonDescription ? renderEmptyCell() : renderItemCodeCell(item.item_code)
+                                        )}
+                                      </td>
+                                      <td>
+                                        {isEditing ? (
+                                          <input
+                                            type="text"
+                                            value={draft?.description ?? ""}
+                                            onChange={(event) => handleItemDraftChange(item.id, "description", event.target.value)}
+                                          />
+                                        ) : (
+                                          renderCell(item.description)
+                                        )}
+                                      </td>
+                                      <td>
+                                        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "nowrap", alignItems: "center" }}>
+                                          {isEditing ? (
+                                            <>
+                                              <button
+                                                type="button"
+                                                className="btn-secondary btn-icon"
+                                                onClick={() => void handleSaveItem(item.id)}
+                                                disabled={savingItemId === item.id}
+                                                aria-label="Save item"
+                                                title="Save"
+                                              >
+                                                {savingItemId === item.id ? (
+                                                  <svg viewBox="0 0 20 20" aria-hidden="true">
+                                                    <circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" strokeWidth="2" strokeDasharray="40" strokeDashoffset="16" />
+                                                  </svg>
+                                                ) : (
+                                                  <svg viewBox="0 0 20 20" aria-hidden="true">
+                                                    <path d="M4 10l4 4 8-8" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                                                  </svg>
+                                                )}
+                                              </button>
+                                              <button
+                                                type="button"
+                                                className="btn-secondary btn-icon"
+                                                onClick={() => handleCancelEditItem(item.id)}
+                                                aria-label="Cancel edit"
+                                                title="Cancel"
+                                              >
+                                                <svg viewBox="0 0 20 20" aria-hidden="true">
+                                                  <path d="M5 5l10 10M15 5l-10 10" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                                                </svg>
+                                              </button>
+                                            </>
+                                          ) : (
+                                            <button
+                                              type="button"
+                                              className="btn-secondary btn-icon"
+                                              onClick={() => handleEditItem(item)}
+                                              aria-label="Edit item"
+                                              title="Edit"
+                                            >
+                                              <svg viewBox="0 0 20 20" aria-hidden="true">
+                                                <path d="M4 13.5V16h2.5L15 7.5 12.5 5 4 13.5z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+                                                <path d="M11.5 6l2.5 2.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                                              </svg>
+                                            </button>
+                                          )}
+                                          <button
+                                            type="button"
+                                            className="btn-secondary btn-icon"
+                                            onClick={() => setDeleteItemTarget(item)}
+                                            disabled={deletingItemId === item.id}
+                                            aria-label="Delete item"
+                                            title="Delete"
+                                          >
+                                            {deletingItemId === item.id ? (
+                                              <svg viewBox="0 0 20 20" aria-hidden="true">
+                                                <circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" strokeWidth="2" strokeDasharray="40" strokeDashoffset="16" />
+                                              </svg>
+                                            ) : (
+                                              <svg viewBox="0 0 20 20" aria-hidden="true">
+                                                <path d="M6 6h8l-1 10H7L6 6z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+                                                <path d="M4 6h12M8 6V4h4v2" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                                              </svg>
+                                            )}
+                                          </button>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  );
+                                });
+                                return groupRows;
+                              })
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
 
               <div style={{ marginTop: "1.5rem" }}>
@@ -1521,12 +1771,81 @@ export default function App() {
           </section>
         )}
 
+        {activePage === "compare" && activeProject && (
+          <section className="panel">
+            <div className="panel__header panel__header--review">
+              <div className="stepper-container">
+                {renderStepper()}
+                <h2 style={{ marginTop: "0.5rem" }}>Compare BOQ vs Drawings</h2>
+              </div>
+            </div>
+            <div className="panel__body">
+              <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "1rem" }}>
+                <button
+                  type="button"
+                  className="btn-secondary btn-compact btn-muted"
+                  onClick={() => requestPageChange("finalize")}
+                >
+                  Go to Finalize
+                </button>
+              </div>
+              <div className="status" style={{ padding: "0.75rem", background: "rgba(255,255,255,0.04)" }}>
+                Comparison view will appear here once the matching results are ready.
+              </div>
+            </div>
+          </section>
+        )}
+
+        {activePage === "finalize" && activeProject && (
+          <section className="panel">
+            <div className="panel__header panel__header--review">
+              <div className="stepper-container">
+                {renderStepper()}
+                <h2 style={{ marginTop: "0.5rem" }}>Finalize</h2>
+              </div>
+            </div>
+            <div className="panel__body">
+              <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "1rem" }}>
+                <button
+                  type="button"
+                  className="btn-secondary btn-compact btn-muted"
+                  onClick={() => requestPageChange("pricing")}
+                >
+                  Go to Pricing
+                </button>
+              </div>
+              <div className="status" style={{ padding: "0.75rem", background: "rgba(255,255,255,0.04)" }}>
+                Finalize view will appear here once the draft is ready for manual edits.
+              </div>
+            </div>
+          </section>
+        )}
+
         {activePage === "file-review" && activeProject && activeFile && (
           <CadExtraction
             mode="review"
             fileUrl={activeFile.fileUrl}
             fileName={activeFile.fileName}
             items={cadReviewItems}
+            onBack={() => requestPageChange("extract")}
+            onSave={handleSaveFileItems}
+          />
+        )}
+
+        {activePage === "schedule-review" && activeProject && activeFile && (
+          <ScheduleFileReview
+            fileUrl={activeFile.fileUrl}
+            fileName={activeFile.fileName}
+            items={fileItems}
+            onBack={() => requestPageChange("extract")}
+            onSave={handleSaveFileItems}
+          />
+        )}
+
+        {activePage === "boq-review" && activeProject && activeFile && (
+          <BoqFileReview
+            fileName={activeFile.fileName}
+            items={fileItems}
             onBack={() => requestPageChange("extract")}
             onSave={handleSaveFileItems}
           />
@@ -1717,30 +2036,35 @@ export default function App() {
             <div className="modal" role="dialog" aria-modal="true" aria-labelledby="unsaved-changes-title">
               <div className="modal__header">
                 <h3 className="modal__title" id="unsaved-changes-title">Unsaved Changes</h3>
-                <button type="button" className="modal__close" onClick={() => setUnsavedDialogOpen(false)}>
+                <button type="button" className="modal__close" onClick={handleUnsavedStay}>
                   ×
                 </button>
               </div>
               <div className="modal__body">
-                <p>You have unsaved changes. Do you want to leave without saving?</p>
+                {unsavedDialogContext === "pricing" ? (
+                  <p>You have unsaved pricing edits. Save before leaving?</p>
+                ) : (
+                  <p>You have unsaved changes. Do you want to leave without saving?</p>
+                )}
               </div>
               <div className="modal__footer">
-                <button type="button" className="btn-secondary" onClick={() => setUnsavedDialogOpen(false)}>
+                <button type="button" className="btn-secondary" onClick={handleUnsavedStay}>
                   Stay
                 </button>
-                <button
-                  type="button"
-                  className="btn-match"
-                  onClick={() => {
-                    if (pendingPageChange) {
-                      setActivePage(pendingPageChange);
-                    }
-                    setPendingPageChange(null);
-                    setUnsavedDialogOpen(false);
-                  }}
-                >
-                  Leave
-                </button>
+                {unsavedDialogContext === "pricing" ? (
+                  <>
+                    <button type="button" className="btn-secondary" onClick={handleUnsavedDiscard}>
+                      Discard
+                    </button>
+                    <button type="button" className="btn-match" onClick={() => void handleUnsavedSaveAndLeave()}>
+                      Save & Leave
+                    </button>
+                  </>
+                ) : (
+                  <button type="button" className="btn-match" onClick={handleUnsavedLeave}>
+                    Leave
+                  </button>
+                )}
               </div>
             </div>
           </div>

@@ -487,7 +487,7 @@ export async function listProjectFileItems(
 export async function addProjectFileItem(
   projectId: string,
   fileId: string,
-  payload: Pick<ProjectItem, "item_code" | "description" | "notes" | "box">
+  payload: Pick<ProjectItem, "item_code" | "description" | "notes" | "box" | "metadata">
 ): Promise<ProjectItem> {
   return safeFetch(
     `${API_BASE}/api/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(fileId)}/items`,
@@ -501,7 +501,7 @@ export async function addProjectFileItem(
 export async function updateProjectItem(
   projectId: string,
   itemId: string,
-  payload: Partial<Pick<ProjectItem, "item_code" | "description" | "notes" | "box">>
+  payload: Partial<Pick<ProjectItem, "item_code" | "description" | "notes" | "box" | "metadata">>
 ): Promise<ProjectItem> {
   return safeFetch(
     `${API_BASE}/api/projects/${encodeURIComponent(projectId)}/items/${encodeURIComponent(itemId)}`,

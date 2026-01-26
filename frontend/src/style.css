@@ -2949,8 +2949,13 @@ body.modal-open {
 }
 
 .stepper__item--current {
-  border-color: rgba(114, 252, 209, 0.5);
-  box-shadow: 0 10px 22px rgba(114, 252, 209, 0.16);
+  border-color: rgba(114, 252, 209, 0.75);
+  background: linear-gradient(140deg, rgba(114, 252, 209, 0.18), rgba(65, 155, 255, 0.12));
+  box-shadow:
+    0 12px 26px rgba(114, 252, 209, 0.22),
+    0 0 0 1px rgba(114, 252, 209, 0.35),
+    inset 0 0 18px rgba(114, 252, 209, 0.08);
+  transform: translateY(-2px);
 }
 
 .stepper__item--complete {
