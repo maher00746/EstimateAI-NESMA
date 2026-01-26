@@ -93,6 +93,16 @@ const CadExtraction: FC<CadExtractionProps> = ({
     if (!isReviewMode) return false;
     return initialSnapshot !== serializeCadItems(items);
   }, [initialSnapshot, isReviewMode, items]);
+  const groupedItems = useMemo(() => {
+    const groups = new Map<string, CadItemWithId[]>();
+    items.forEach((item) => {
+      const key = (item.item_code || "ITEM").trim() || "ITEM";
+      const list = groups.get(key) ?? [];
+      list.push(item);
+      groups.set(key, list);
+    });
+    return Array.from(groups.entries());
+  }, [items]);
 
 
   useEffect(() => {
@@ -215,9 +225,6 @@ const CadExtraction: FC<CadExtractionProps> = ({
     onBack();
   }, [onBack]);
 
-  const handleGoToPricing = useCallback(() => {
-    window.dispatchEvent(new CustomEvent("pricing:go"));
-  }, []);
 
   const handleSaveAndBack = useCallback(async () => {
     const saved = await handleSave();
@@ -283,68 +290,78 @@ const CadExtraction: FC<CadExtractionProps> = ({
                 </td>
               </tr>
             ) : (
-              items.map((item, idx) => {
-                const isLinked = selectedItemId === item.id;
-                const handleRowClick = (event: React.MouseEvent<HTMLTableRowElement>) => {
-                  const target = event.target as HTMLElement;
-                  if (target.closest("input, textarea, button, select")) return;
-                  selectionSourceRef.current = "table";
-                  setSelectedItemId(item.id);
-                };
-                return (
-                  <tr
-                    key={item.id}
-                    className={`matches-table__row ${isLinked ? "is-linked" : ""}`}
-                    onClick={handleRowClick}
-                    ref={(el) => {
-                      tableRowRefs.current[item.id] = el;
-                    }}
-                  >
-                    <td>
-                      {isReviewMode ? (
-                        <input
-                          type="text"
-                          value={item.item_code}
-                          onChange={(event) => handleItemFieldChange(item.id, "item_code", event.target.value)}
-                          placeholder={`Item ${idx + 1}`}
-                        />
-                      ) : (
-                        (item.item_code ?? "").trim() === "ITEM" ? "" : item.item_code || `Item ${idx + 1}`
-                      )}
-                    </td>
-                    <td>
-                      {isReviewMode ? (
-                        <input
-                          type="text"
-                          value={item.description}
-                          onChange={(event) => handleItemFieldChange(item.id, "description", event.target.value)}
-                          placeholder="Description"
-                        />
-                      ) : (
-                        item.description || "—"
-                      )}
-                    </td>
-                    <td>
-                      {isReviewMode ? (
-                        <input
-                          type="text"
-                          value={item.notes}
-                          onChange={(event) => handleItemFieldChange(item.id, "notes", event.target.value)}
-                          placeholder="Notes"
-                        />
-                      ) : (
-                        (item.item_code ?? "").trim() === "ITEM" ? "" : item.notes || "—"
-                      )}
-                    </td>
-                    {isReviewMode && (
+              groupedItems.flatMap(([code, group]) => {
+                const groupRows: React.ReactNode[] = [
+                  (
+                    <tr key={`group-${code}`} className="boq-group-row">
+                      <td colSpan={isReviewMode ? 4 : 3}>{code}</td>
+                    </tr>
+                  ),
+                ];
+                group.forEach((item, idx) => {
+                  const isLinked = selectedItemId === item.id;
+                  const handleRowClick = (event: React.MouseEvent<HTMLTableRowElement>) => {
+                    const target = event.target as HTMLElement;
+                    if (target.closest("input, textarea, button, select")) return;
+                    selectionSourceRef.current = "table";
+                    setSelectedItemId(item.id);
+                  };
+                  groupRows.push(
+                    <tr
+                      key={item.id}
+                      className={`matches-table__row ${isLinked ? "is-linked" : ""}`}
+                      onClick={handleRowClick}
+                      ref={(el) => {
+                        tableRowRefs.current[item.id] = el;
+                      }}
+                    >
                       <td>
-                        <button type="button" className="btn-secondary" onClick={() => handleDeleteItem(item.id)}>
-                          Delete
-                        </button>
+                        {isReviewMode ? (
+                          <input
+                            type="text"
+                            value={item.item_code}
+                            onChange={(event) => handleItemFieldChange(item.id, "item_code", event.target.value)}
+                            placeholder={`Item ${idx + 1}`}
+                          />
+                        ) : (
+                          (item.item_code ?? "").trim() === "ITEM" ? "" : item.item_code || `Item ${idx + 1}`
+                        )}
                       </td>
-                    )}
-                  </tr>
-                );
+                      <td>
+                        {isReviewMode ? (
+                          <input
+                            type="text"
+                            value={item.description}
+                            onChange={(event) => handleItemFieldChange(item.id, "description", event.target.value)}
+                            placeholder="Description"
+                          />
+                        ) : (
+                          item.description || "—"
+                        )}
+                      </td>
+                      <td>
+                        {isReviewMode ? (
+                          <input
+                            type="text"
+                            value={item.notes}
+                            onChange={(event) => handleItemFieldChange(item.id, "notes", event.target.value)}
+                            placeholder="Notes"
+                          />
+                        ) : (
+                          (item.item_code ?? "").trim() === "ITEM" ? "" : item.notes || "—"
+                        )}
+                      </td>
+                      {isReviewMode && (
+                        <td>
+                          <button type="button" className="btn-secondary" onClick={() => handleDeleteItem(item.id)}>
+                            Delete
+                          </button>
+                        </td>
+                      )}
+                    </tr>
+                  );
+                });
+                return groupRows;
               })
             )}
           </tbody>

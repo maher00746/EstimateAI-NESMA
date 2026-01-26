@@ -1,6 +1,6 @@
 import mongoose, { Schema } from "mongoose";
 
-export type ProjectFileType = "drawing" | "boq";
+export type ProjectFileType = "drawing" | "boq" | "schedule";
 export type ProjectFileStatus = "pending" | "processing" | "ready" | "failed";
 
 export interface ProjectFileDocument extends mongoose.Document {

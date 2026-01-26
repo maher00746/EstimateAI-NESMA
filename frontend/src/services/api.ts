@@ -423,10 +423,12 @@ export interface UploadProjectFilesResponse {
 export async function uploadProjectFiles(
   projectId: string,
   drawings: File[],
+  scheduleFiles: File[],
   boq?: File | null
 ): Promise<UploadProjectFilesResponse> {
   const data = new FormData();
   drawings.forEach((file) => data.append("drawings", file));
+  scheduleFiles.forEach((file) => data.append("schedule", file));
   if (boq) {
     data.append("boq", boq);
   }

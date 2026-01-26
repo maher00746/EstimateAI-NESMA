@@ -25,7 +25,7 @@ export async function createProjectItem(params: {
   userId: string;
   projectId: string;
   fileId: string;
-  source: "cad" | "manual" | "boq";
+  source: "cad" | "manual" | "boq" | "schedule";
   item_code: string;
   description: string;
   notes: string;

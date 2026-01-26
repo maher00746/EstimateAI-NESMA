@@ -1,6 +1,6 @@
 import mongoose, { Schema } from "mongoose";
 
-export type ProjectItemSource = "cad" | "manual" | "boq";
+export type ProjectItemSource = "cad" | "manual" | "boq" | "schedule";
 
 export type CadBox = {
   left: number;

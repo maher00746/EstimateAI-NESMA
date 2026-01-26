@@ -239,7 +239,7 @@ export interface PricingPayload {
 }
 
 export type ProjectFileStatus = "pending" | "processing" | "ready" | "failed";
-export type ProjectFileType = "drawing" | "boq";
+export type ProjectFileType = "drawing" | "boq" | "schedule";
 
 export interface ProjectFile {
   id: string;
@@ -268,7 +268,7 @@ export interface ProjectItem {
   fileId: string;
   fileNo?: number | null;
   fileName?: string | null;
-  source: "cad" | "manual" | "boq";
+  source: "cad" | "manual" | "boq" | "schedule";
   item_code: string;
   description: string;
   notes: string;

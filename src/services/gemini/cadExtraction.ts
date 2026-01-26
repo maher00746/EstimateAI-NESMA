@@ -130,6 +130,56 @@ const CAD_EXTRACTION_SCHEMA = {
   },
 };
 
+const DRAWING_DETAILS_SCHEMA = {
+  type: "array",
+  items: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      item_name: { type: "string" },
+      details: { type: "string" },
+      box: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          left: { type: "number", description: "x_min (0 to 1)" },
+          top: { type: "number", description: "y_min (0 to 1)" },
+          right: { type: "number", description: "x_max (0 to 1)" },
+          bottom: { type: "number", description: "y_max (0 to 1)" },
+        },
+        required: ["left", "top", "right", "bottom"],
+      },
+    },
+    required: ["item_name", "details", "box"],
+  },
+};
+
+const buildScheduleList = (items: string[]): string => {
+  const trimmed = items.map((item) => item.trim()).filter(Boolean);
+  if (trimmed.length === 0) return "- (no schedule items provided)";
+  return trimmed.map((item) => `- ${item}`).join("\n");
+};
+
+const buildDrawingDetailsPrompt = (scheduleItems: string[]): string => `You are a senior MEP estimation engineer and estimation manager. Your task is to extract BOQ-relevant details from the drawings ONLY for the schedule CODES listed below.
+
+Schedule item CODES only (use these exact values; do not infer missing codes):
+${buildScheduleList(scheduleItems)}
+
+Instructions:
+1. Extract details for the listed items.each extracted detail/text from the drawings should be related to the items.
+2. If an item is mentioned without useful BOQ details, omit it entirely.
+3. Capture details that are required to build the BOQ for the item (materials, layers, thicknesses, steps, dimensions, specifications, quantities, or installation notes).
+4. Some details may not include the item code in the text. If the detail clearly belongs to a specific item (by proximity, leader lines, layering, callouts, or section context), or required to impliment the item later, assign it to that item.
+5. Do NOT repeat the same detail for the same item. If a detail is duplicated, return it only once.
+6. Return a JSON array of objects. Each object must include:
+   - item_name: the schedule item CODE (exactly as listed, or the closest match).
+   - details: the extracted BOQ-relevant detail text.
+   - box: normalized bounding box { left, top, right, bottom } for the extracted detail text.
+7. Use normalized coordinates between 0.0 and 1.0 with origin at top-left. The box must tightly wrap the text.
+8. If multiple distinct details exist for the same item, return multiple objects with the same item_name.
+
+Return JSON only, with no additional prose.`;
+
 export async function extractCadBoqItemsWithGemini(params: {
   filePath: string;
   fileName: string;
@@ -218,4 +268,118 @@ export async function extractCadBoqItemsWithGemini(params: {
   }
 
   return { items: parsed, rawText: text };
+}
+
+export async function extractDrawingDetailsWithGemini(params: {
+  filePath: string;
+  fileName: string;
+  scheduleItems: string[];
+}): Promise<{ items: CadExtractionItem[]; rawText: string }> {
+  if (!config.geminiApiKey) {
+    throw new Error("GEMINI_API_KEY is not set");
+  }
+
+  const ai = getGeminiClient();
+  const mimeType = mimeTypeFromFileName(params.fileName);
+  const prompt = buildDrawingDetailsPrompt(params.scheduleItems);
+
+  console.log("[Gemini Drawing] Uploading file:", {
+    fileName: params.fileName,
+    mimeType,
+    model: config.geminiModel,
+  });
+
+  const uploaded = await ai.files.upload({
+    file: params.filePath,
+    config: {
+      mimeType,
+      displayName: params.fileName,
+    },
+  });
+
+  if ((uploaded as any).state === "PROCESSING") {
+    await waitForFileReady(ai, uploaded.name!);
+  }
+
+  const requestPayload = {
+    model: config.geminiModel,
+    contents: [
+      { fileData: { fileUri: uploaded.uri, mimeType } },
+      { text: prompt },
+    ],
+    config: {
+      responseMimeType: "application/json",
+      responseJsonSchema: DRAWING_DETAILS_SCHEMA,
+      thinkingConfig: {
+        thinkingBudget: Number.isFinite(config.geminiThinkingBudget) ? config.geminiThinkingBudget : 16384,
+      },
+      mediaResolution: MediaResolution.MEDIA_RESOLUTION_MEDIUM,
+      maxOutputTokens: 65536,
+      temperature: 0.1,
+    },
+  };
+
+  let response: unknown;
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      response = await ai.models.generateContent(requestPayload);
+      break;
+    } catch (error) {
+      const err = error as Error & { cause?: unknown };
+      console.error(`[Gemini Drawing] generateContent failed (attempt ${attempt}/${maxAttempts})`, {
+        message: err.message,
+        cause: err.cause,
+        model: config.geminiModel,
+        mimeType,
+        fileUri: uploaded.uri,
+        responseMimeType: "application/json",
+      });
+      if (attempt === maxAttempts) {
+        throw error;
+      }
+      const delayMs = 800 * attempt + Math.floor(Math.random() * 250);
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+
+  const text = String((response as any)?.text ?? "").trim();
+  if (!text) {
+    return { items: [], rawText: "" };
+  }
+
+  type DrawingDetailItem = {
+    item_name: string;
+    details: string;
+    box: CadExtractionBox;
+  };
+  let parsed: DrawingDetailItem[] = [];
+  try {
+    const maybe = JSON.parse(text);
+    if (Array.isArray(maybe)) {
+      parsed = maybe as DrawingDetailItem[];
+    }
+  } catch {
+    parsed = [];
+  }
+
+  const seen = new Set<string>();
+  const mapped: CadExtractionItem[] = parsed
+    .filter((item) => {
+      const key = `${(item.item_name || "ITEM").trim().toLowerCase()}|${(item.details || "")
+        .trim()
+        .toLowerCase()}`;
+      if (!key || key.endsWith("|")) return false;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .map((item) => ({
+      item_code: item.item_name || "ITEM",
+      description: item.details || "N/A",
+      notes: "",
+      box: item.box,
+    }));
+
+  return { items: mapped, rawText: text };
 }

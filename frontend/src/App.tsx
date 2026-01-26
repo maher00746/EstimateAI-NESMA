@@ -82,6 +82,7 @@ export default function App() {
   const [fileItemsSnapshot, setFileItemsSnapshot] = useState<ProjectItem[]>([]);
   const [projectLogs, setProjectLogs] = useState<ProjectLog[]>([]);
   const [drawings, setDrawings] = useState<File[]>([]);
+  const [scheduleFiles, setScheduleFiles] = useState<File[]>([]);
   const [boqFile, setBoqFile] = useState<File | null>(null);
   const [projectNameInput, setProjectNameInput] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<ProjectSummary | null>(null);
@@ -90,6 +91,7 @@ export default function App() {
   const [deletingFile, setDeletingFile] = useState(false);
   const [addFilesOpen, setAddFilesOpen] = useState(false);
   const [addDrawings, setAddDrawings] = useState<File[]>([]);
+  const [addSchedules, setAddSchedules] = useState<File[]>([]);
   const [addBoq, setAddBoq] = useState<File | null>(null);
   const [retryingFileId, setRetryingFileId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string>("");
@@ -102,6 +104,8 @@ export default function App() {
   const [deletingItemId, setDeletingItemId] = useState<string | null>(null);
   const [deleteItemTarget, setDeleteItemTarget] = useState<ProjectItem | null>(null);
   const [activeBoqTab, setActiveBoqTab] = useState<string>("all");
+  const [activeDrawingTab, setActiveDrawingTab] = useState<string>("all");
+  const [activeScheduleTab, setActiveScheduleTab] = useState<string>("all");
 
   const [pendingPageChange, setPendingPageChange] = useState<AppPage | null>(null);
   const [unsavedDialogOpen, setUnsavedDialogOpen] = useState(false);
@@ -228,6 +232,7 @@ export default function App() {
       const project = await createProject();
       setActiveProject(project);
       setDrawings([]);
+      setScheduleFiles([]);
       setBoqFile(null);
       requestPageChange("upload");
       setMaxStepReached(0);
@@ -289,9 +294,18 @@ export default function App() {
     }
   }, [activeFile, activeProject, deleteFileTarget, refreshProjectData, requestPageChange]);
 
+  const hasScheduleItems = useMemo(
+    () => projectItems.some((item) => item.source === "schedule"),
+    [projectItems]
+  );
+
   const handleRetryFile = useCallback(
     async (file: ProjectFile) => {
       if (!activeProject) return;
+      if (file.fileType === "drawing" && !hasScheduleItems) {
+        setFeedback("Upload and process schedule files before retrying drawings.");
+        return;
+      }
       setRetryingFileId(file.id);
       try {
         await retryProjectFile(activeProject.id, file.id, uuidv4());
@@ -301,13 +315,13 @@ export default function App() {
         setRetryingFileId(null);
       }
     },
-    [activeProject]
+    [activeProject, hasScheduleItems]
   );
 
   const handleStartExtraction = useCallback(async () => {
     if (!activeProject) return;
-    if (drawings.length === 0 && !boqFile) {
-      setFeedback("Please upload drawings or a BOQ file.");
+    if (drawings.length === 0 && scheduleFiles.length === 0 && !boqFile) {
+      setFeedback("Please upload drawings, schedule files, or a BOQ file.");
       return;
     }
     setPageLoadingMessage("Preparing extraction…");
@@ -317,7 +331,7 @@ export default function App() {
         const updated = await updateProjectName(activeProject.id, trimmedName);
         setActiveProject(updated);
       }
-      const uploaded = await uploadProjectFiles(activeProject.id, drawings, boqFile);
+      const uploaded = await uploadProjectFiles(activeProject.id, drawings, scheduleFiles, boqFile);
       const uploadedIds = uploaded.files.map((file) => file.id);
       await startProjectExtraction(activeProject.id, uuidv4(), uploadedIds);
       requestPageChange("extract");
@@ -328,7 +342,7 @@ export default function App() {
     } finally {
       setPageLoadingMessage(null);
     }
-  }, [activeProject, boqFile, drawings, projectNameInput, refreshProjectData, requestPageChange]);
+  }, [activeProject, boqFile, drawings, scheduleFiles, projectNameInput, refreshProjectData, requestPageChange]);
 
   const handleOpenFile = useCallback(async (file: ProjectFile) => {
     if (!activeProject) return;
@@ -584,12 +598,50 @@ export default function App() {
   }));
 
   const drawingItems = useMemo(
-    () => projectItems.filter((item) => item.source !== "boq"),
+    () => projectItems.filter((item) => item.source === "cad"),
+    [projectItems]
+  );
+  const scheduleItems = useMemo(
+    () => projectItems.filter((item) => item.source === "schedule"),
     [projectItems]
   );
   const boqItems = useMemo(
     () => projectItems.filter((item) => item.source === "boq"),
     [projectItems]
+  );
+  const drawingTabs = useMemo(() => {
+    const drawingFiles = projectFiles.filter((file) => file.fileType === "drawing");
+    return [
+      { id: "all", label: "All Drawings" },
+      ...drawingFiles.map((file) => ({ id: file.id, label: file.fileName })),
+    ];
+  }, [projectFiles]);
+  const scheduleTabs = useMemo(() => {
+    const scheduleFiles = projectFiles.filter((file) => file.fileType === "schedule");
+    return [
+      { id: "all", label: "All Schedule" },
+      ...scheduleFiles.map((file) => ({ id: file.id, label: file.fileName })),
+    ];
+  }, [projectFiles]);
+  const activeDrawingTabId = drawingTabs.some((tab) => tab.id === activeDrawingTab) ? activeDrawingTab : "all";
+  const activeScheduleTabId = scheduleTabs.some((tab) => tab.id === activeScheduleTab) ? activeScheduleTab : "all";
+  const filteredDrawingItems = useMemo(
+    () => (activeDrawingTabId === "all" ? drawingItems : drawingItems.filter((item) => item.fileId === activeDrawingTabId)),
+    [activeDrawingTabId, drawingItems]
+  );
+  const groupedDrawingItems = useMemo(() => {
+    const groups = new Map<string, ProjectItem[]>();
+    filteredDrawingItems.forEach((item) => {
+      const key = (item.item_code || "ITEM").trim() || "ITEM";
+      const list = groups.get(key) ?? [];
+      list.push(item);
+      groups.set(key, list);
+    });
+    return Array.from(groups.entries());
+  }, [filteredDrawingItems]);
+  const filteredScheduleItems = useMemo(
+    () => (activeScheduleTabId === "all" ? scheduleItems : scheduleItems.filter((item) => item.fileId === activeScheduleTabId)),
+    [activeScheduleTabId, scheduleItems]
   );
   const boqTabs = useMemo(() => {
     const sheetNames = Array.from(
@@ -628,6 +680,30 @@ export default function App() {
     if (key === "unit") return findField(["unit", "uom", "unit of measure"]) ?? "—";
     if (key === "rate") return findField(["rate", "unit rate", "unit price", "price"]) ?? "—";
     if (key === "amount") return findField(["amount", "total", "total price"]) ?? "—";
+    return "—";
+  };
+  const scheduleColumns = useMemo(() => {
+    const columns: string[] = [];
+    const seen = new Set<string>();
+    filteredScheduleItems.forEach((item) => {
+      const fields = item.metadata?.fields ?? {};
+      Object.keys(fields).forEach((key) => {
+        if (!seen.has(key)) {
+          seen.add(key);
+          columns.push(key);
+        }
+      });
+    });
+    return columns.length > 0 ? columns : ["Item", "Description", "Notes"];
+  }, [filteredScheduleItems]);
+  const getScheduleCellValue = (item: ProjectItem, column: string) => {
+    const fields = item.metadata?.fields ?? {};
+    const direct = fields[column];
+    if (direct && String(direct).trim() !== "") return String(direct);
+    const key = normalizeColumn(column);
+    if (key === "item") return item.item_code;
+    if (key === "description") return item.description;
+    if (key === "notes") return item.notes;
     return "—";
   };
 
@@ -905,7 +981,7 @@ export default function App() {
             <div className="panel__header">
               <div className="stepper-container">
                 {renderStepper()}
-                <h2 style={{ marginTop: "0.5rem" }}>Upload Drawings & BOQ</h2>
+                <h2 style={{ marginTop: "0.5rem" }}>Upload Drawings, Schedule & BOQ</h2>
               </div>
             </div>
             <div className="panel__body">
@@ -950,6 +1026,24 @@ export default function App() {
                       {drawings.length > 0 ? `${drawings.length} drawing(s) selected` : "Upload drawings (multiple)"}
                     </p>
                     <p className="dropzone__hint">PDF or image files.</p>
+                  </div>
+                </label>
+                <label className="dropzone dropzone--estimate uploader-card">
+                  <input
+                    type="file"
+                    multiple
+                    accept=".pdf,.xlsx,.xls,.csv,.docx,.txt"
+                    onChange={(event) => setScheduleFiles(Array.from(event.target.files ?? []))}
+                  />
+                  <div className="dropzone__content">
+                    <svg width="48" height="48" viewBox="0 0 48 48" fill="none" className="dropzone__icon">
+                      <path d="M24 16v16M16 24h16" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+                      <rect x="8" y="8" width="32" height="32" rx="4" stroke="currentColor" strokeWidth="2" />
+                    </svg>
+                    <p className="dropzone__text">
+                      {scheduleFiles.length > 0 ? `${scheduleFiles.length} schedule file(s) selected` : "Upload schedule files (multiple)"}
+                    </p>
+                    <p className="dropzone__hint">PDF, Excel, Word, or text.</p>
                   </div>
                 </label>
                 <label className="dropzone dropzone--estimate uploader-card">
@@ -1045,7 +1139,9 @@ export default function App() {
                                   Go to File
                                 </button>
                               ) : (
-                                <span className="status">BOQ</span>
+                                <span className="status">
+                                  {file.fileType === "schedule" ? "Schedule" : "BOQ"}
+                                </span>
                               )}
                               {file.status === "failed" && (
                                 <button
@@ -1075,7 +1171,71 @@ export default function App() {
               </div>
 
               <div>
-                <h3 style={{ marginTop: 0 }}>Extracted Items</h3>
+                <h3 style={{ marginTop: 0 }}>Schedule Items</h3>
+                {scheduleItems.length === 0 ? (
+                  <div className="status" style={{ padding: "0.75rem", background: "rgba(255,255,255,0.04)" }}>
+                    No schedule items extracted yet.
+                  </div>
+                ) : (
+                  <div>
+                    <div className="tabs">
+                      {scheduleTabs.map((tab) => (
+                        <button
+                          key={tab.id}
+                          type="button"
+                          className={`tab ${activeScheduleTabId === tab.id ? "is-active" : ""}`}
+                          onClick={() => setActiveScheduleTab(tab.id)}
+                        >
+                          {tab.label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="table-wrapper items-table-scroll">
+                      <table className="matches-table boq-table">
+                        <thead>
+                          <tr>
+                            {scheduleColumns.map((col) => (
+                              <th key={col}>{col}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filteredScheduleItems.length === 0 ? (
+                            <tr className="matches-table__row">
+                              <td colSpan={scheduleColumns.length} style={{ textAlign: "center", color: "rgba(227,233,255,0.7)" }}>
+                                No schedule items for this file.
+                              </td>
+                            </tr>
+                          ) : (
+                            filteredScheduleItems.map((item) => (
+                              <tr key={item.id} className="matches-table__row">
+                                {scheduleColumns.map((col) => (
+                                  <td key={`${item.id}-${col}`}>{renderCell(getScheduleCellValue(item, col))}</td>
+                                ))}
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div style={{ marginTop: "1.5rem" }}>
+                <h3 style={{ marginTop: 0 }}>Drawing Details</h3>
+                <div className="tabs">
+                  {drawingTabs.map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      className={`tab ${activeDrawingTabId === tab.id ? "is-active" : ""}`}
+                      onClick={() => setActiveDrawingTab(tab.id)}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
                 <div className="table-wrapper items-table-scroll">
                   <table className="matches-table">
                     <thead>
@@ -1089,125 +1249,135 @@ export default function App() {
                       </tr>
                     </thead>
                     <tbody>
-                      {drawingItems.length === 0 ? (
+                      {filteredDrawingItems.length === 0 ? (
                         <tr className="matches-table__row">
                           <td colSpan={6} style={{ textAlign: "center", color: "rgba(227,233,255,0.7)" }}>
-                            No items extracted yet.
+                            No drawing details extracted yet.
                           </td>
                         </tr>
                       ) : (
-                        drawingItems.map((item) => {
-                          const isEditing = editingItemId === item.id;
-                          const draft = itemDrafts[item.id];
-                          const hideNonDescription = isItemPlaceholder(item.item_code);
-                          return (
-                            <tr key={item.id} className="matches-table__row">
-                              <td>{hideNonDescription ? renderEmptyCell() : renderCell(item.fileNo)}</td>
-                              <td>{hideNonDescription ? renderEmptyCell() : renderCell(item.fileName)}</td>
-                              <td>
-                                {isEditing ? (
-                                  <input
-                                    type="text"
-                                    value={draft?.item_code ?? ""}
-                                    onChange={(event) => handleItemDraftChange(item.id, "item_code", event.target.value)}
-                                  />
-                                ) : (
-                                  hideNonDescription ? renderEmptyCell() : renderItemCodeCell(item.item_code)
-                                )}
-                              </td>
-                              <td>
-                                {isEditing ? (
-                                  <input
-                                    type="text"
-                                    value={draft?.description ?? ""}
-                                    onChange={(event) => handleItemDraftChange(item.id, "description", event.target.value)}
-                                  />
-                                ) : (
-                                  renderCell(item.description)
-                                )}
-                              </td>
-                              <td>
-                                {isEditing ? (
-                                  <input
-                                    type="text"
-                                    value={draft?.notes ?? ""}
-                                    onChange={(event) => handleItemDraftChange(item.id, "notes", event.target.value)}
-                                  />
-                                ) : (
-                                  hideNonDescription ? renderEmptyCell() : renderCell(item.notes)
-                                )}
-                              </td>
-                              <td>
-                                <div style={{ display: "flex", gap: "0.5rem", flexWrap: "nowrap", alignItems: "center" }}>
+                        groupedDrawingItems.flatMap(([code, group]) => {
+                          const groupRows: ReactNode[] = [
+                            (
+                              <tr key={`drawing-group-${code}`} className="boq-group-row">
+                                <td colSpan={6}>{code}</td>
+                              </tr>
+                            ),
+                          ];
+                          group.forEach((item) => {
+                            const isEditing = editingItemId === item.id;
+                            const draft = itemDrafts[item.id];
+                            const hideNonDescription = isItemPlaceholder(item.item_code);
+                            groupRows.push(
+                              <tr key={item.id} className="matches-table__row">
+                                <td>{hideNonDescription ? renderEmptyCell() : renderCell(item.fileNo)}</td>
+                                <td>{hideNonDescription ? renderEmptyCell() : renderCell(item.fileName)}</td>
+                                <td>
                                   {isEditing ? (
-                                    <>
+                                    <input
+                                      type="text"
+                                      value={draft?.item_code ?? ""}
+                                      onChange={(event) => handleItemDraftChange(item.id, "item_code", event.target.value)}
+                                    />
+                                  ) : (
+                                    hideNonDescription ? renderEmptyCell() : renderItemCodeCell(item.item_code)
+                                  )}
+                                </td>
+                                <td>
+                                  {isEditing ? (
+                                    <input
+                                      type="text"
+                                      value={draft?.description ?? ""}
+                                      onChange={(event) => handleItemDraftChange(item.id, "description", event.target.value)}
+                                    />
+                                  ) : (
+                                    renderCell(item.description)
+                                  )}
+                                </td>
+                                <td>
+                                  {isEditing ? (
+                                    <input
+                                      type="text"
+                                      value={draft?.notes ?? ""}
+                                      onChange={(event) => handleItemDraftChange(item.id, "notes", event.target.value)}
+                                    />
+                                  ) : (
+                                    hideNonDescription ? renderEmptyCell() : renderCell(item.notes)
+                                  )}
+                                </td>
+                                <td>
+                                  <div style={{ display: "flex", gap: "0.5rem", flexWrap: "nowrap", alignItems: "center" }}>
+                                    {isEditing ? (
+                                      <>
+                                        <button
+                                          type="button"
+                                          className="btn-secondary btn-icon"
+                                          onClick={() => void handleSaveItem(item.id)}
+                                          disabled={savingItemId === item.id}
+                                          aria-label="Save item"
+                                          title="Save"
+                                        >
+                                          {savingItemId === item.id ? (
+                                            <svg viewBox="0 0 20 20" aria-hidden="true">
+                                              <circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" strokeWidth="2" strokeDasharray="40" strokeDashoffset="16" />
+                                            </svg>
+                                          ) : (
+                                            <svg viewBox="0 0 20 20" aria-hidden="true">
+                                              <path d="M4 10l4 4 8-8" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                                            </svg>
+                                          )}
+                                        </button>
+                                        <button
+                                          type="button"
+                                          className="btn-secondary btn-icon"
+                                          onClick={() => handleCancelEditItem(item.id)}
+                                          aria-label="Cancel edit"
+                                          title="Cancel"
+                                        >
+                                          <svg viewBox="0 0 20 20" aria-hidden="true">
+                                            <path d="M5 5l10 10M15 5l-10 10" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                                          </svg>
+                                        </button>
+                                      </>
+                                    ) : (
                                       <button
                                         type="button"
                                         className="btn-secondary btn-icon"
-                                        onClick={() => void handleSaveItem(item.id)}
-                                        disabled={savingItemId === item.id}
-                                        aria-label="Save item"
-                                        title="Save"
-                                      >
-                                        {savingItemId === item.id ? (
-                                          <svg viewBox="0 0 20 20" aria-hidden="true">
-                                            <circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" strokeWidth="2" strokeDasharray="40" strokeDashoffset="16" />
-                                          </svg>
-                                        ) : (
-                                          <svg viewBox="0 0 20 20" aria-hidden="true">
-                                            <path d="M4 10l4 4 8-8" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                                          </svg>
-                                        )}
-                                      </button>
-                                      <button
-                                        type="button"
-                                        className="btn-secondary btn-icon"
-                                        onClick={() => handleCancelEditItem(item.id)}
-                                        aria-label="Cancel edit"
-                                        title="Cancel"
+                                        onClick={() => handleEditItem(item)}
+                                        aria-label="Edit item"
+                                        title="Edit"
                                       >
                                         <svg viewBox="0 0 20 20" aria-hidden="true">
-                                          <path d="M5 5l10 10M15 5l-10 10" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                                          <path d="M4 13.5V16h2.5L15 7.5 12.5 5 4 13.5z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+                                          <path d="M11.5 6l2.5 2.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
                                         </svg>
                                       </button>
-                                    </>
-                                  ) : (
+                                    )}
                                     <button
                                       type="button"
                                       className="btn-secondary btn-icon"
-                                      onClick={() => handleEditItem(item)}
-                                      aria-label="Edit item"
-                                      title="Edit"
+                                      onClick={() => setDeleteItemTarget(item)}
+                                      disabled={deletingItemId === item.id}
+                                      aria-label="Delete item"
+                                      title="Delete"
                                     >
-                                      <svg viewBox="0 0 20 20" aria-hidden="true">
-                                        <path d="M4 13.5V16h2.5L15 7.5 12.5 5 4 13.5z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-                                        <path d="M11.5 6l2.5 2.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-                                      </svg>
+                                      {deletingItemId === item.id ? (
+                                        <svg viewBox="0 0 20 20" aria-hidden="true">
+                                          <circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" strokeWidth="2" strokeDasharray="40" strokeDashoffset="16" />
+                                        </svg>
+                                      ) : (
+                                        <svg viewBox="0 0 20 20" aria-hidden="true">
+                                          <path d="M6 6h8l-1 10H7L6 6z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+                                          <path d="M4 6h12M8 6V4h4v2" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                                        </svg>
+                                      )}
                                     </button>
-                                  )}
-                                  <button
-                                    type="button"
-                                    className="btn-secondary btn-icon"
-                                    onClick={() => setDeleteItemTarget(item)}
-                                    disabled={deletingItemId === item.id}
-                                    aria-label="Delete item"
-                                    title="Delete"
-                                  >
-                                    {deletingItemId === item.id ? (
-                                      <svg viewBox="0 0 20 20" aria-hidden="true">
-                                        <circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" strokeWidth="2" strokeDasharray="40" strokeDashoffset="16" />
-                                      </svg>
-                                    ) : (
-                                      <svg viewBox="0 0 20 20" aria-hidden="true">
-                                        <path d="M6 6h8l-1 10H7L6 6z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-                                        <path d="M4 6h12M8 6V4h4v2" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-                                      </svg>
-                                    )}
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          );
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          });
+                          return groupRows;
                         })
                       )}
                     </tbody>
@@ -1372,7 +1542,7 @@ export default function App() {
                 </button>
               </div>
               <div className="modal__body">
-                <div className="uploaders-grid">
+                <div className="uploaders-grid uploaders-grid--horizontal">
                   <label className="dropzone dropzone--estimate uploader-card">
                     <input
                       type="file"
@@ -1389,6 +1559,24 @@ export default function App() {
                         {addDrawings.length > 0 ? `${addDrawings.length} drawing(s) selected` : "Upload drawings (multiple)"}
                       </p>
                       <p className="dropzone__hint">PDF or image files.</p>
+                    </div>
+                  </label>
+                  <label className="dropzone dropzone--estimate uploader-card">
+                    <input
+                      type="file"
+                      multiple
+                      accept=".pdf,.xlsx,.xls,.csv,.docx,.txt"
+                      onChange={(event) => setAddSchedules(Array.from(event.target.files ?? []))}
+                    />
+                    <div className="dropzone__content">
+                      <svg width="48" height="48" viewBox="0 0 48 48" fill="none" className="dropzone__icon">
+                        <path d="M24 16v16M16 24h16" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+                        <rect x="8" y="8" width="32" height="32" rx="4" stroke="currentColor" strokeWidth="2" />
+                      </svg>
+                      <p className="dropzone__text">
+                        {addSchedules.length > 0 ? `${addSchedules.length} schedule file(s) selected` : "Upload schedule files (multiple)"}
+                      </p>
+                      <p className="dropzone__hint">PDF, Excel, Word, or text.</p>
                     </div>
                   </label>
                   <label className="dropzone dropzone--estimate uploader-card">
@@ -1419,16 +1607,17 @@ export default function App() {
                   className="btn-match"
                   onClick={async () => {
                     if (!activeProject) return;
-                    if (addDrawings.length === 0 && !addBoq) {
+                    if (addDrawings.length === 0 && addSchedules.length === 0 && !addBoq) {
                       setFeedback("Please select files to add.");
                       return;
                     }
                     setPageLoadingMessage("Uploading files…");
                     try {
-                      const uploaded = await uploadProjectFiles(activeProject.id, addDrawings, addBoq);
+                      const uploaded = await uploadProjectFiles(activeProject.id, addDrawings, addSchedules, addBoq);
                       const uploadedIds = uploaded.files.map((file) => file.id);
                       await startProjectExtraction(activeProject.id, uuidv4(), uploadedIds);
                       setAddDrawings([]);
+                      setAddSchedules([]);
                       setAddBoq(null);
                       setAddFilesOpen(false);
                       await refreshProjectData(activeProject.id);

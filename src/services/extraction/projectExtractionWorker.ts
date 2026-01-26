@@ -1,10 +1,13 @@
+import { randomUUID } from "crypto";
 import { ProjectExtractJobModel } from "../../modules/storage/projectExtractionJobModel";
 import { ProjectFileModel } from "../../modules/storage/projectFileModel";
 import { ProjectItemModel } from "../../modules/storage/projectItemModel";
 import { ProjectModel } from "../../modules/storage/projectModel";
+import { upsertProjectExtractJob } from "../../modules/storage/projectExtractionJobRepository";
 import { createProjectLog } from "../../modules/storage/projectLogRepository";
-import { extractCadBoqItemsWithGemini } from "../gemini/cadExtraction";
+import { extractCadBoqItemsWithGemini, extractDrawingDetailsWithGemini } from "../gemini/cadExtraction";
 import { extractBoqItemsFromExcel } from "../boq/boqExcelExtraction";
+import { extractScheduleItemsWithGemini } from "../openai/scheduleExtraction";
 
 const POLL_INTERVAL_MS = 2000;
 const MAX_CONCURRENCY = 12;
@@ -33,6 +36,73 @@ async function updateProjectStatusIfIdle(projectId: string): Promise<void> {
   } else {
     await ProjectModel.updateOne({ _id: projectId }, { status: "analyzing" }).exec();
   }
+}
+
+async function loadScheduleItemTokens(projectId: string): Promise<string[]> {
+  const scheduleItems = await ProjectItemModel.find({
+    projectId,
+    source: "schedule",
+  }).exec();
+  const tokens = new Set<string>();
+  const candidateKeys = ["CODE"];
+  scheduleItems.forEach((item) => {
+    const fields = (item.metadata?.fields ?? {}) as Record<string, string>;
+    candidateKeys.forEach((key) => {
+      const value = String(fields[key] ?? "").trim();
+      if (value) tokens.add(value);
+    });
+  });
+  return Array.from(tokens);
+}
+
+async function queuePendingDrawingsAfterScheduleReady(job: {
+  userId: string;
+  projectId: string;
+}): Promise<void> {
+  const scheduleFiles = await ProjectFileModel.find({
+    projectId: job.projectId,
+    fileType: "schedule",
+  }).exec();
+  if (scheduleFiles.length === 0) return;
+  if (!scheduleFiles.every((file) => file.status === "ready")) return;
+  const scheduleItemCount = await ProjectItemModel.countDocuments({
+    projectId: job.projectId,
+    source: "schedule",
+  }).exec();
+  if (scheduleItemCount === 0) return;
+
+  const pendingDrawings = await ProjectFileModel.find({
+    projectId: job.projectId,
+    fileType: "drawing",
+    status: "pending",
+  }).exec();
+  if (pendingDrawings.length === 0) return;
+
+  const idempotencyKey = randomUUID();
+  await Promise.all(
+    pendingDrawings.map(async (file) => {
+      const existingJob = await ProjectExtractJobModel.findOne({
+        projectId: job.projectId,
+        fileId: file._id,
+        status: { $in: ["queued", "processing"] },
+      }).exec();
+      if (existingJob) return;
+      await upsertProjectExtractJob({
+        userId: job.userId,
+        projectId: job.projectId,
+        fileId: String(file._id),
+        idempotencyKey,
+      });
+      await ProjectFileModel.updateOne({ _id: file._id }, { status: "pending" }).exec();
+      await createProjectLog({
+        userId: job.userId,
+        projectId: job.projectId,
+        fileId: String(file._id),
+        message: `Queued extraction for ${file.originalName} after schedule completed.`,
+      });
+    })
+  );
+  await ProjectModel.updateOne({ _id: job.projectId }, { status: "analyzing" }).exec();
 }
 
 async function processJob(jobId: string): Promise<void> {
@@ -94,7 +164,7 @@ async function processJob(jobId: string): Promise<void> {
       userId: typeof job.userId;
       projectId: typeof job.projectId;
       fileId: typeof job.fileId;
-      source: "cad" | "boq";
+      source: "cad" | "boq" | "schedule";
       item_code: string;
       description: string;
       notes: string;
@@ -297,11 +367,74 @@ async function processJob(jobId: string): Promise<void> {
           boqSheetStatus: sheetStatusArray,
         }
       ).exec();
-    } else {
-      // No log for "calling" to keep processing log concise.
-      const result = await extractCadBoqItemsWithGemini({
+    } else if (file.fileType === "schedule") {
+      await createProjectLog({
+        userId: String(job.userId),
+        projectId: String(job.projectId),
+        fileId: String(job.fileId),
+        message: `Calling OpenAI for schedule extraction on ${file.originalName}.`,
+      });
+      const result = await extractScheduleItemsWithGemini({
         filePath: file.storedPath,
         fileName: file.originalName,
+      });
+      await createProjectLog({
+        userId: String(job.userId),
+        projectId: String(job.projectId),
+        fileId: String(job.fileId),
+        message: `OpenAI response received for schedule file ${file.originalName} (${result.items.length} items).`,
+      });
+
+      await ProjectItemModel.deleteMany({
+        projectId: job.projectId,
+        fileId: job.fileId,
+        source: "schedule",
+      }).exec();
+
+      items = (result.items || []).map((item) => {
+        const fields = { ...(item.fields ?? {}) };
+        if (!fields.item_code) fields.item_code = item.item_code || "";
+        if (!fields.description) fields.description = item.description || "";
+        if (!fields.notes) fields.notes = item.notes || "";
+        return {
+          userId: job.userId,
+          projectId: job.projectId,
+          fileId: job.fileId,
+          source: "schedule" as const,
+          item_code: item.item_code || "ITEM",
+          description: item.description || "N/A",
+          notes: item.notes || "N/A",
+          box: null,
+          metadata: { fields },
+        };
+      });
+    } else {
+      const scheduleItems = await loadScheduleItemTokens(String(job.projectId));
+      const filteredCodes = scheduleItems.filter((code) => code.length > 0 && code.length <= 80);
+      const maxCodes = 300;
+      const codesToSend = filteredCodes.length > maxCodes ? filteredCodes.slice(0, maxCodes) : filteredCodes;
+      if (codesToSend.length === 0) {
+        throw new Error("Schedule extraction is required before drawing extraction.");
+      }
+      await createProjectLog({
+        userId: String(job.userId),
+        projectId: String(job.projectId),
+        fileId: String(job.fileId),
+        message: `Sending ${codesToSend.length} schedule code(s) to Gemini for drawing extraction.`,
+      });
+      if (filteredCodes.length > maxCodes) {
+        await createProjectLog({
+          userId: String(job.userId),
+          projectId: String(job.projectId),
+          fileId: String(job.fileId),
+          level: "warning",
+          message: `Schedule code list truncated from ${filteredCodes.length} to ${maxCodes} items to keep the prompt within limits.`,
+        });
+      }
+      const result = await extractDrawingDetailsWithGemini({
+        filePath: file.storedPath,
+        fileName: file.originalName,
+        scheduleItems: codesToSend,
       });
       await createProjectLog({
         userId: String(job.userId),
@@ -334,6 +467,12 @@ async function processJob(jobId: string): Promise<void> {
 
     if (file.fileType !== "boq") {
       await ProjectFileModel.updateOne({ _id: file._id }, { status: "ready" }).exec();
+    }
+    if (file.fileType === "schedule") {
+      await queuePendingDrawingsAfterScheduleReady({
+        userId: String(job.userId),
+        projectId: String(job.projectId),
+      });
     }
     await ProjectExtractJobModel.updateOne(
       { _id: job._id },

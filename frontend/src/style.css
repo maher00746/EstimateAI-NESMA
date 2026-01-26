@@ -615,7 +615,7 @@ body {
 
 .dropzone--estimate {
   width: 100%;
-  min-height: 120px;
+  min-height: 96px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -634,13 +634,13 @@ body {
 
 .dropzone__text {
   margin: 0;
-  font-size: 0.95rem;
+  font-size: 0.78rem;
   font-weight: 500;
   color: rgba(227, 233, 255, 0.85);
 }
 
 .dropzone__hint {
-  font-size: 0.8rem;
+  font-size: 0.66rem;
   color: rgba(114, 252, 209, 0.8);
   font-weight: 600;
 }
@@ -1547,8 +1547,19 @@ body {
   margin-bottom: 0.5rem;
 }
 
+.uploaders-grid--horizontal {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: stretch;
+}
+
+.uploaders-grid--horizontal .uploader-card {
+  flex: 1 1 0;
+  min-width: 180px;
+}
+
 .uploader-card {
-  min-height: 140px;
+  min-height: 96px;
 }
 
 .upload-actions {
@@ -2761,7 +2772,8 @@ body {
   background: rgba(19, 25, 45, 0.95);
   border: 1px solid rgba(114, 252, 209, 0.2);
   border-radius: 12px;
-  width: min(980px, 96vw);
+  width: min(700px, 98vw);
+  max-width: 1500px;
   max-height: 95vh;
   overflow: hidden;
   display: flex;

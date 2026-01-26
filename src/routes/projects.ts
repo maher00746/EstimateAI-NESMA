@@ -50,6 +50,7 @@ const upload = multer({
 
 const projectUpload = upload.fields([
   { name: "drawings", maxCount: 20 },
+  { name: "schedule", maxCount: 20 },
   { name: "boq", maxCount: 1 },
 ]);
 
@@ -188,11 +189,14 @@ router.post(
       const drawings = Array.isArray((fileFields as any).drawings)
         ? ((fileFields as any).drawings as Express.Multer.File[])
         : [];
+      const scheduleFiles = Array.isArray((fileFields as any).schedule)
+        ? ((fileFields as any).schedule as Express.Multer.File[])
+        : [];
       const boqFiles = Array.isArray((fileFields as any).boq)
         ? ((fileFields as any).boq as Express.Multer.File[])
         : [];
 
-      if (drawings.length === 0 && boqFiles.length === 0) {
+      if (drawings.length === 0 && scheduleFiles.length === 0 && boqFiles.length === 0) {
         return res.status(400).json({ message: "At least one file is required" });
       }
 
@@ -202,6 +206,12 @@ router.post(
           storedPath: file.path,
           storedName: path.basename(file.path),
           fileType: "drawing" as const,
+        })),
+        ...scheduleFiles.map((file) => ({
+          originalName: file.originalname,
+          storedPath: file.path,
+          storedName: path.basename(file.path),
+          fileType: "schedule" as const,
         })),
         ...boqFiles.map((file) => ({
           originalName: file.originalname,
@@ -272,7 +282,7 @@ router.post(
         ? requestBody.fileIds.map((id: unknown) => String(id))
         : [];
       const targetFiles = files.filter((file) => {
-        if (file.fileType !== "drawing" && file.fileType !== "boq") return false;
+        if (file.fileType !== "drawing" && file.fileType !== "boq" && file.fileType !== "schedule") return false;
         if (!hasFileIds && requestedFileIds.length === 0) return true;
         return requestedFileIds.includes(String(file._id));
       });
@@ -281,8 +291,60 @@ router.post(
         return res.status(200).json({ jobs: [] });
       }
 
+      const isInitialRequest =
+        hasFileIds && requestedFileIds.length > 0 && targetFiles.length === files.length;
+      const scheduleFiles = targetFiles.filter((file) => file.fileType === "schedule");
+      const drawingFiles = targetFiles.filter((file) => file.fileType === "drawing");
+      const boqFiles = targetFiles.filter((file) => file.fileType === "boq");
+      const scheduleItemCount = await ProjectItemModel.countDocuments({
+        userId,
+        projectId,
+        source: "schedule",
+      }).exec();
+      const scheduleReady =
+        scheduleItemCount > 0 ||
+        (scheduleFiles.length > 0 && scheduleFiles.every((file) => file.status === "ready"));
+      const filesToQueue = [...boqFiles, ...scheduleFiles];
+      const blockedDrawings = drawingFiles.filter(() => !scheduleReady);
+
+      if (blockedDrawings.length > 0) {
+        if (isInitialRequest) {
+          await Promise.all(
+            blockedDrawings.map((file) =>
+              createProjectLog({
+                userId,
+                projectId,
+                fileId: String(file._id),
+                message: `Drawing extraction will start after schedule extraction completes.`,
+              })
+            )
+          );
+        } else {
+          await Promise.all(
+            blockedDrawings.map(async (file) => {
+              await updateProjectFileStatus(userId, projectId, String(file._id), "failed");
+              await createProjectLog({
+                userId,
+                projectId,
+                fileId: String(file._id),
+                level: "warning",
+                message: "Schedule extraction is required before drawing extraction. Upload schedule files and retry.",
+              });
+            })
+          );
+        }
+      }
+
+      if (scheduleReady) {
+        filesToQueue.push(...drawingFiles);
+      }
+
+      if (filesToQueue.length === 0) {
+        return res.status(200).json({ jobs: [] });
+      }
+
       const jobs = await Promise.all(
-        targetFiles.map(async (file) => {
+        filesToQueue.map(async (file) => {
           const job = await upsertProjectExtractJob({
             userId,
             projectId,
@@ -312,7 +374,7 @@ router.post(
       await createProjectLog({
         userId,
         projectId,
-        message: `Extraction started for ${targetFiles.length} file(s).`,
+        message: `Extraction started for ${filesToQueue.length} file(s).`,
       });
 
       res.status(200).json({ jobs });
@@ -332,8 +394,18 @@ router.post(
       if (!file) {
         return res.status(404).json({ message: "File not found" });
       }
-      if (file.fileType !== "drawing" && file.fileType !== "boq") {
-        return res.status(400).json({ message: "Only drawing or BOQ files can be retried" });
+      if (file.fileType !== "drawing" && file.fileType !== "boq" && file.fileType !== "schedule") {
+        return res.status(400).json({ message: "Only drawing, schedule, or BOQ files can be retried" });
+      }
+      if (file.fileType === "drawing") {
+        const scheduleItemCount = await ProjectItemModel.countDocuments({
+          userId,
+          projectId,
+          source: "schedule",
+        }).exec();
+        if (scheduleItemCount === 0) {
+          return res.status(400).json({ message: "Upload and process schedule files before retrying drawings." });
+        }
       }
       if (file.status !== "failed") {
         return res.status(400).json({ message: "File is not in failed state" });
