@@ -7,6 +7,9 @@ export type PricingPayload = {
   mpHourlyRate: string;
   subItemsByItemId: Record<string, unknown>;
   autoRowQtyByItemId: Record<string, unknown>;
+  qtyOverrideByItemId?: Record<string, unknown>;
+  collapsedByItemId?: Record<string, unknown>;
+  completedByItemId?: Record<string, unknown>;
 };
 
 export async function getPricing(userId: string, projectId: string) {
@@ -24,6 +27,9 @@ export async function upsertPricing(userId: string, projectId: string, payload: 
         mpHourlyRate: payload.mpHourlyRate ?? "0",
         subItemsByItemId: payload.subItemsByItemId ?? {},
         autoRowQtyByItemId: payload.autoRowQtyByItemId ?? {},
+        qtyOverrideByItemId: payload.qtyOverrideByItemId ?? {},
+        collapsedByItemId: payload.collapsedByItemId ?? {},
+        completedByItemId: payload.completedByItemId ?? {},
       },
     },
     { new: true, upsert: true, setDefaultsOnInsert: true }

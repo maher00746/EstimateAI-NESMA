@@ -87,5 +87,3 @@ const ProductivityRatesSchema = new Schema<ProductivityRatesDocument>(
 export const ProductivityRatesModel =
   mongoose.models.ProductivityRates ??
   mongoose.model<ProductivityRatesDocument>("ProductivityRates", ProductivityRatesSchema);
-
-export type { ProductivityRatesDocument };

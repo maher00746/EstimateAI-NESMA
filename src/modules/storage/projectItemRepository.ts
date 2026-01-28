@@ -32,9 +32,12 @@ export async function createProjectItem(params: {
   box?: { left: number; top: number; right: number; bottom: number } | null;
   metadata?: {
     sheetName?: string;
+    sheetIndex?: number;
     category?: string;
     subcategory?: string;
     rowIndex?: number;
+    chunkIndex?: number;
+    chunkCount?: number;
     fields?: Record<string, string>;
   } | null;
 }): Promise<ProjectItemDocument> {

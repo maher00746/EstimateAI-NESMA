@@ -23,5 +23,3 @@ ProjectSchema.index({ userId: 1, updatedAt: -1 });
 
 export const ProjectModel =
   mongoose.models.Project ?? mongoose.model<ProjectDocument>("Project", ProjectSchema);
-
-export type { ProjectDocument };

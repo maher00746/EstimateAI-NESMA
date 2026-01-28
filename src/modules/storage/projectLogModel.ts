@@ -27,5 +27,3 @@ ProjectLogSchema.index({ projectId: 1, createdAt: -1 });
 
 export const ProjectLogModel =
   mongoose.models.ProjectLog ?? mongoose.model<ProjectLogDocument>("ProjectLog", ProjectLogSchema);
-
-export type { ProjectLogDocument };

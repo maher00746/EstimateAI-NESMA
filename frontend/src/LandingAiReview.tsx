@@ -127,11 +127,10 @@ function PdfPageWithOverlay(props: {
   hoveredChunkId: string;
   overlayEnabled?: boolean;
   showAllOverlays?: boolean;
-  labelById: Record<string, string>;
   onSelectChunk: (chunk: LandingAiChunk) => void;
   pageContainerRef?: (el: HTMLDivElement | null) => void;
 }) {
-  const { pageIndex, width, overlayChunks, selectedChunkId, hoveredChunkId, overlayEnabled = false, showAllOverlays = false, labelById, onSelectChunk, pageContainerRef } = props;
+  const { pageIndex, width, overlayChunks, selectedChunkId, hoveredChunkId, overlayEnabled = false, showAllOverlays = false, onSelectChunk, pageContainerRef } = props;
   const pageWrapperRef = useRef<HTMLDivElement>(null);
   const [canvasSize, setCanvasSize] = useState<{ width: number; height: number }>({ width: 1, height: 1 });
 
@@ -712,7 +711,6 @@ export default function LandingAiReview(props: LandingAiReviewProps) {
                     hoveredChunkId={hoveredChunkId}
                     overlayEnabled={pdfOverlayEnabled}
                     showAllOverlays={props.showAllOverlays}
-                    labelById={labelById}
                     onSelectChunk={handleSelectChunk}
                     pageContainerRef={(el) => {
                       pageRefs.current[i] = el;

@@ -1,16 +1,14 @@
 services:
   backend:
-    build:
-      context: .
-      dockerfile: Dockerfile.backend
-      args:
-        - PORT=${BACKEND_PORT:-4000}
+    image: ${BACKEND_IMAGE:-maher00746/nesma-backend:latest}
     environment:
       PORT: ${BACKEND_PORT:-4000}
       HOST: 0.0.0.0
+      NODE_ENV: ${NODE_ENV:-production}
       MONGO_URI: ${MONGO_URI}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      LANDINGAI_API_KEY: ${LANDINGAI_API_KEY:-}
       GEMINI_MODEL: ${GEMINI_MODEL:-}
       GEMINI_THINKING_BUDGET: ${GEMINI_THINKING_BUDGET:-}
       JWT_SECRET: ${JWT_SECRET:-change-me}
@@ -29,13 +27,11 @@ services:
       - app-network
 
   worker:
-    build:
-      context: .
-      dockerfile: Dockerfile.backend
+    image: ${BACKEND_IMAGE:-maher00746/nesma-backend:latest}
     command: npm run start:worker
     environment:
-      PORT: ${BACKEND_PORT:-4000}
       HOST: 0.0.0.0
+      NODE_ENV: ${NODE_ENV:-production}
       MONGO_URI: ${MONGO_URI}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       JWT_SECRET: ${JWT_SECRET:-change-me}
@@ -57,13 +53,9 @@ services:
       - app-network
 
   frontend:
-    build:
-      context: .
-      dockerfile: Dockerfile.frontend
-      args:
-        - VITE_API_URL=${VITE_API_URL:-http://backend:4000}
+    image: ${FRONTEND_IMAGE:-maher00746/nesma-frontend:latest}
     ports:
-      - "${FRONTEND_PORT:-5173}:80"
+      - "${FRONTEND_PORT:-3000}:80"
     depends_on:
       - backend
     networks:

@@ -233,8 +233,12 @@ export interface PricingPayload {
   idleText: string;
   poRate: string;
   mpHourlyRate: string;
+  totalPriceFactor?: string;
   subItemsByItemId: Record<string, unknown>;
   autoRowQtyByItemId: Record<string, unknown>;
+  qtyOverrideByItemId?: Record<string, unknown>;
+  collapsedByItemId?: Record<string, unknown>;
+  completedByItemId?: Record<string, unknown>;
   updatedAt?: string | null;
 }
 
@@ -275,9 +279,12 @@ export interface ProjectItem {
   box?: CadExtractionBox | null;
   metadata?: {
     sheetName?: string;
+    sheetIndex?: number;
     category?: string;
     subcategory?: string;
     rowIndex?: number;
+    chunkIndex?: number;
+    chunkCount?: number;
     fields?: Record<string, string>;
   } | null;
   createdAt: string;

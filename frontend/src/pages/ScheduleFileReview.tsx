@@ -14,11 +14,6 @@ type ScheduleFileReviewProps = {
 const normalizeColumn = (value: string): string =>
   value.trim().toLowerCase().replace(/\s+/g, " ");
 
-const renderCell = (value: string | number | null | undefined) => {
-  const text = value === null || value === undefined || String(value).trim() === "" ? "—" : String(value);
-  return <span className="cell-text" title={text}>{text}</span>;
-};
-
 const getScheduleCellValue = (item: ProjectItem, column: string) => {
   const fields = item.metadata?.fields ?? {};
   const direct = fields[column];

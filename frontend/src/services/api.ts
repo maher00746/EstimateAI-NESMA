@@ -400,6 +400,42 @@ export async function savePricing(projectId: string, payload: PricingPayload): P
   });
 }
 
+export interface ProductivitySuggestBlock {
+  blockId: string;
+  itemCode: string;
+  description: string;
+  qty?: string;
+  notes: string[];
+  drawingDetails: string[];
+  scheduleCodes: string[];
+}
+
+export interface ProductivitySuggestRequest {
+  productivityItems: Array<{ id: string; description: string }>;
+  blocks: ProductivitySuggestBlock[];
+}
+
+export interface ProductivitySuggestResponse {
+  results: Array<{
+    blockId: string;
+    items: Array<{
+      item: string;
+      suggestedIds: string[];
+      notes?: string;
+    }>;
+  }>;
+  rawContent?: string;
+}
+
+export async function suggestProductivityItems(
+  payload: ProductivitySuggestRequest
+): Promise<ProductivitySuggestResponse> {
+  return safeFetch(`${API_BASE}/api/pricing/suggest-productivity`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function retryProjectFile(projectId: string, fileId: string, idempotencyKey: string): Promise<{
   id: string;
   fileId: string;

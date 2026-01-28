@@ -9,6 +9,9 @@ export interface PricingDocument extends mongoose.Document {
   mpHourlyRate: string;
   subItemsByItemId: Record<string, unknown>;
   autoRowQtyByItemId: Record<string, unknown>;
+  qtyOverrideByItemId: Record<string, unknown>;
+  collapsedByItemId: Record<string, unknown>;
+  completedByItemId: Record<string, unknown>;
   updatedAt: Date;
   createdAt: Date;
 }
@@ -23,6 +26,9 @@ const PricingSchema = new Schema<PricingDocument>(
     mpHourlyRate: { type: String, default: "0" },
     subItemsByItemId: { type: Schema.Types.Mixed, default: {} },
     autoRowQtyByItemId: { type: Schema.Types.Mixed, default: {} },
+    qtyOverrideByItemId: { type: Schema.Types.Mixed, default: {} },
+    collapsedByItemId: { type: Schema.Types.Mixed, default: {} },
+    completedByItemId: { type: Schema.Types.Mixed, default: {} },
   },
   { timestamps: true }
 );

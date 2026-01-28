@@ -9,6 +9,7 @@ export type BoqExtractionItem = {
   notes: string;
   metadata: {
     sheetName: string;
+    sheetIndex?: number;
     category?: string;
     subcategory?: string;
     rowIndex: number;
@@ -25,10 +26,12 @@ type BoqSheetItem = {
   quantity: string;
   unit: string;
   rate: string;
-  amount: string;
   category: string;
   subcategory: string;
   rowIndex: number;
+  chunkIndex?: number;
+  chunkCount?: number;
+  sheetIndex?: number;
 };
 
 const EXCEL_EXTENSIONS = new Set([".xlsx", ".xls", ".csv"]);
@@ -47,11 +50,12 @@ Task:
 Rules:
 1) Input rows are in order. Keep the output in the same order (CRITICAL), each extracted item should be in the same order as input.
 2) A category row is usually a text-only row. Use its exact text as category.
-3) A BOQ item row contains an item key (e.g., A, B, C ,1, 2 ..) and a description. It may also include quantity, unit, rate, and amount.
+3) A BOQ item row contains an item key (e.g., A, B, C ,1, 2 ..) and a description. It may also include quantity, unit, and rate.
 4) A notes/instructions/details rows are rows that contain notes/instructions/details that relate to an item or a group of items, they don't have qty or unit, just description,Don't drop them.
 4) If a field is missing in the row, return an empty string for that field.
 5) Do NOT include category-only or subcategory-only rows in the output; they only set context for the following items.
 6) Do NOT return empty rows in the output (no description)
+7) CRIZTICAL: if a row has has "Rate Only" in the description or any other field in that row, return "Rate Only" string for the rate field.
 
 Return only a JSON object with this shape:
 {
@@ -63,7 +67,6 @@ Return only a JSON object with this shape:
       "quantity": "",
       "unit": "",
       "rate": "",
-      "amount": "",
       "category": "",
       "rowIndex": 0
     }
@@ -82,12 +85,11 @@ const BOQ_SHEET_SCHEMA = {
       quantity: { type: "string" },
       unit: { type: "string" },
       rate: { type: "string" },
-      amount: { type: "string" },
       category: { type: "string" },
       subcategory: { type: "string" },
       rowIndex: { type: "number" },
     },
-    required: ["item_key", "description", "notes", "quantity", "unit", "rate", "amount", "category", "subcategory", "rowIndex"],
+    required: ["item_key", "description", "notes", "quantity", "unit", "rate", "category", "subcategory", "rowIndex"],
   },
 };
 
@@ -270,6 +272,9 @@ export async function extractBoqItemsFromExcel(params: {
   const targetSheets = Array.isArray(params.sheetNames) && params.sheetNames.length > 0
     ? workbook.SheetNames.filter((name) => params.sheetNames?.includes(name))
     : workbook.SheetNames;
+  const sheetOrderMap = new Map<string, number>(
+    targetSheets.map((name, index) => [name, index])
+  );
 
   const MAX_ROWS_PER_CHUNK = 350;
   const sheetResults = await Promise.all(
@@ -308,20 +313,19 @@ export async function extractBoqItemsFromExcel(params: {
         await params.onSheetStage?.({ sheetName, stage: "calling", chunkIndex, chunkCount });
         try {
           const extracted = await extractSheetWithOpenAi({ sheetName, rows: normalized });
+          const itemsWithChunk = (extracted.items ?? []).map((item) => ({
+            ...item,
+            chunkIndex,
+            chunkCount,
+          }));
           await params.onSheetStage?.({
             sheetName,
             stage: "received",
-            itemCount: extracted.items?.length ?? 0,
+            itemCount: itemsWithChunk.length,
             chunkIndex,
             chunkCount,
           });
-          await params.onSheetResult?.({
-            sheetName,
-            items: extracted.items ?? [],
-            chunkIndex,
-            chunkCount,
-          });
-          chunkResults.push({ partIndex: chunkIndex, ...extracted });
+          chunkResults.push({ partIndex: chunkIndex, items: itemsWithChunk, rawText: extracted.rawText });
         } catch (error) {
           await params.onSheetStage?.({
             sheetName,
@@ -335,8 +339,15 @@ export async function extractBoqItemsFromExcel(params: {
       }
 
       const orderedChunks = [...chunkResults].sort((a, b) => a.partIndex - b.partIndex);
-      const mergedItems = orderedChunks.flatMap((result) => result.items ?? []);
+      const sheetIndex = sheetOrderMap.get(sheetName);
+      const mergedItems = orderedChunks
+        .flatMap((result) => result.items ?? [])
+        .map((item) => ({
+          ...item,
+          sheetIndex: typeof sheetIndex === "number" ? sheetIndex : undefined,
+        }));
       const mergedRaw = orderedChunks.map((result) => result.rawText).filter(Boolean).join("\n\n");
+      await params.onSheetResult?.({ sheetName, items: mergedItems, chunkCount });
       return { sheetName, items: mergedItems, rawText: mergedRaw };
     })
   );
@@ -344,13 +355,13 @@ export async function extractBoqItemsFromExcel(params: {
 
   sheetResults.forEach((result) => {
     const sheetName = result.sheetName;
+    const sheetIndex = sheetOrderMap.get(sheetName);
     (result.items || []).forEach((item) => {
       const fields: Record<string, string> = {
         qty: item.quantity || "",
         quantity: item.quantity || "",
         unit: item.unit || "",
         rate: item.rate || "",
-        amount: item.amount || "",
       };
       items.push({
         item_code: item.item_key || "ITEM",
@@ -358,9 +369,12 @@ export async function extractBoqItemsFromExcel(params: {
         notes: item.notes || "",
         metadata: {
           sheetName,
+          sheetIndex: typeof sheetIndex === "number" ? sheetIndex : undefined,
           category: item.category || undefined,
           subcategory: item.subcategory || undefined,
           rowIndex: Number.isFinite(item.rowIndex) ? item.rowIndex : 0,
+          chunkIndex: typeof item.chunkIndex === "number" ? item.chunkIndex : undefined,
+          chunkCount: typeof item.chunkCount === "number" ? item.chunkCount : undefined,
           fields,
         },
       });

@@ -175,7 +175,6 @@ export async function generateDrawingMarkdownWithGemini(params: {
     return { markdown: "", rawText: "" };
   }
 
-  const ai = getGeminiClient();
   const mimeType = mimeTypeFromFileName(params.fileName);
 
   // Optional: parse the PDF with LandingAI first, then provide its markdown alongside the PDF to Gemini.
@@ -231,6 +230,8 @@ export async function generateDrawingMarkdownWithGemini(params: {
 
   await params.onStage?.("gemini");
   console.log(`[Gemini] Uploading file: ${params.fileName} (${mimeType})`);
+
+  const ai = getGeminiClient();
 
   // Upload file so we can pass the full binary (PDF/images) to Gemini.
   const uploaded = await ai.files.upload({

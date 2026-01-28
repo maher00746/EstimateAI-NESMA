@@ -1,4 +1,6 @@
 import { randomUUID } from "crypto";
+import path from "path";
+import { config } from "../../config";
 import { ProjectExtractJobModel } from "../../modules/storage/projectExtractionJobModel";
 import { ProjectFileModel } from "../../modules/storage/projectFileModel";
 import { ProjectItemModel } from "../../modules/storage/projectItemModel";
@@ -13,17 +15,51 @@ const POLL_INTERVAL_MS = 2000;
 const MAX_CONCURRENCY = 12;
 const inFlightJobs = new Set<string>();
 
+function resolveStoredFilePath(file: { storedPath?: string | null; storedName?: string | null }): string {
+  const storedPath = String(file.storedPath ?? "").trim();
+  const rawStoredName = String(file.storedName ?? "").trim();
+  const normalizedStoredName = rawStoredName
+    ? path.posix.basename(rawStoredName.replace(/\\/g, "/"))
+    : "";
+  const fallbackName = normalizedStoredName || path.win32.basename(storedPath) || path.posix.basename(storedPath);
+  if (storedPath) {
+    if (process.platform !== "win32" && /^[a-zA-Z]:[\\/]/.test(storedPath)) {
+      return path.join(config.uploadDir, fallbackName);
+    }
+    return storedPath;
+  }
+  return fallbackName ? path.join(config.uploadDir, fallbackName) : storedPath;
+}
+
+
 async function claimNextJob() {
-  return ProjectExtractJobModel.findOneAndUpdate(
-    { status: "queued" },
-    {
-      status: "processing",
-      stage: "processing",
-      message: "Starting extraction…",
-      startedAt: new Date(),
-    },
-    { new: true, sort: { createdAt: 1 } }
-  ).exec();
+  const queuedJobs = await ProjectExtractJobModel.find({ status: "queued" })
+    .sort({ createdAt: 1 })
+    .limit(30)
+    .exec();
+
+  for (const job of queuedJobs) {
+    const file = await ProjectFileModel.findById(job.fileId).exec();
+
+    const claimed = await ProjectExtractJobModel.findOneAndUpdate(
+      { _id: job._id, status: "queued" },
+      {
+        status: "processing",
+        stage: "processing",
+        message: "Starting extraction…",
+        startedAt: new Date(),
+      },
+      { new: true }
+    ).exec();
+
+    if (!claimed) {
+      continue;
+    }
+
+    return claimed;
+  }
+
+  return null;
 }
 
 async function updateProjectStatusIfIdle(projectId: string): Promise<void> {
@@ -247,7 +283,7 @@ async function processJob(jobId: string): Promise<void> {
         }
       >();
       const result = await extractBoqItemsFromExcel({
-        filePath: file.storedPath,
+        filePath: resolveStoredFilePath(file),
         fileName: file.originalName,
         sheetNames: retrySheets,
         retryParts: Object.keys(retryParts).length > 0 ? retryParts : undefined,
@@ -296,7 +332,7 @@ async function processJob(jobId: string): Promise<void> {
             message: `OpenAI failed for BOQ sheet ${sheetName}${chunkLabel}${errorMessage ? `: ${errorMessage}` : ""}.`,
           });
         },
-        onSheetResult: async ({ sheetName, items: sheetItems, chunkIndex, chunkCount }) => {
+        onSheetResult: async ({ sheetName, items: sheetItems, chunkCount }) => {
           const mapped = (sheetItems || []).map((item) => ({
             userId: job.userId,
             projectId: job.projectId,
@@ -308,17 +344,18 @@ async function processJob(jobId: string): Promise<void> {
             box: null,
             metadata: {
               sheetName,
+              sheetIndex: typeof item.sheetIndex === "number" ? item.sheetIndex : undefined,
               category: item.category || undefined,
               subcategory: item.subcategory || undefined,
               rowIndex: Number.isFinite(item.rowIndex) ? item.rowIndex : 0,
-              chunkIndex: typeof chunkIndex === "number" ? chunkIndex : undefined,
-              chunkCount: typeof chunkCount === "number" ? chunkCount : undefined,
+              chunkIndex: typeof item.chunkIndex === "number" ? item.chunkIndex : undefined,
+              chunkCount: typeof item.chunkCount === "number" ? item.chunkCount : chunkCount,
               fields: {
                 qty: item.quantity || "",
                 quantity: item.quantity || "",
                 unit: item.unit || "",
                 rate: item.rate || "",
-                amount: item.amount || "",
+                amount: "",
               },
             },
           }));
@@ -375,7 +412,7 @@ async function processJob(jobId: string): Promise<void> {
         message: `Calling OpenAI for schedule extraction on ${file.originalName}.`,
       });
       const result = await extractScheduleItemsWithGemini({
-        filePath: file.storedPath,
+        filePath: resolveStoredFilePath(file),
         fileName: file.originalName,
       });
       await createProjectLog({
@@ -432,7 +469,7 @@ async function processJob(jobId: string): Promise<void> {
         });
       }
       const result = await extractDrawingDetailsWithGemini({
-        filePath: file.storedPath,
+        filePath: resolveStoredFilePath(file),
         fileName: file.originalName,
         scheduleItems: codesToSend,
       });

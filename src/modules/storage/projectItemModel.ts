@@ -20,9 +20,12 @@ export interface ProjectItemDocument extends mongoose.Document {
   box?: CadBox | null;
   metadata?: {
     sheetName?: string;
+    sheetIndex?: number;
     category?: string;
     subcategory?: string;
     rowIndex?: number;
+    chunkIndex?: number;
+    chunkCount?: number;
     fields?: Record<string, string>;
   } | null;
   createdAt: Date;

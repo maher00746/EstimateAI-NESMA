@@ -781,7 +781,16 @@ export default function App() {
       activeBoqTabId === "all"
         ? boqItems
         : boqItems.filter((item) => item.metadata?.sheetName === activeBoqTabId.replace(/^sheet:/, ""));
+    const isAll = activeBoqTabId === "all";
     return [...items].sort((a, b) => {
+      if (isAll) {
+        const aSheet = a.metadata?.sheetIndex ?? 0;
+        const bSheet = b.metadata?.sheetIndex ?? 0;
+        if (aSheet !== bSheet) return aSheet - bSheet;
+      }
+      const aChunk = a.metadata?.chunkIndex ?? 0;
+      const bChunk = b.metadata?.chunkIndex ?? 0;
+      if (aChunk !== bChunk) return aChunk - bChunk;
       const aIndex = a.metadata?.rowIndex ?? 0;
       const bIndex = b.metadata?.rowIndex ?? 0;
       return aIndex - bIndex;
@@ -795,7 +804,7 @@ export default function App() {
       }).length,
     [filteredBoqItems]
   );
-  const boqColumns = useMemo(() => ["Item", "Description", "QTY", "Unit", "Rate", "Amount"], []);
+  const boqColumns = useMemo(() => ["Item", "Description", "QTY", "Unit", "Rate"], []);
   const getBoqCellValue = (item: ProjectItem, column: string) => {
     const key = normalizeColumn(column);
     const fields = item.metadata?.fields ?? {};
@@ -806,7 +815,6 @@ export default function App() {
     if (key === "qty") return findField(["qty", "quantity", "q'ty", "qnty"]) ?? "—";
     if (key === "unit") return findField(["unit", "uom", "unit of measure"]) ?? "—";
     if (key === "rate") return findField(["rate", "unit rate", "unit price", "price"]) ?? "—";
-    if (key === "amount") return findField(["amount", "total", "total price"]) ?? "—";
     return "—";
   };
   const scheduleColumns = useMemo(() => {
@@ -1110,6 +1118,8 @@ export default function App() {
         {activePage === "pricing" && (
           <Pricing
             boqItems={boqItems}
+            scheduleItems={scheduleItems}
+            drawingItems={drawingItems}
             projectName={activeProject?.name}
             projectId={activeProject?.id}
             headerTop={renderStepper()}
@@ -1252,7 +1262,7 @@ export default function App() {
                   ))}
                 </div>
               )}
-              <div className="pricing-accordion">
+              <div className="pricing-accordion pricing-accordion--review">
                 <div className={`pricing-accordion__card ${openAccordions.projectFiles ? "is-open" : ""}`}>
                   <button
                     type="button"
@@ -1313,9 +1323,9 @@ export default function App() {
                                   <td>{renderFileStatus(file.status)}</td>
                                   <td>
                                     <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-                              <button type="button" className="btn-secondary" onClick={() => void handleOpenFile(file)}>
-                                Go to File
-                              </button>
+                                      <button type="button" className="btn-secondary" onClick={() => void handleOpenFile(file)}>
+                                        Go to File
+                                      </button>
                                       {file.status === "failed" && (
                                         <button
                                           type="button"
@@ -1431,10 +1441,12 @@ export default function App() {
                                     const itemCode = (item.item_code ?? "").trim();
                                     const highlightItemCode = /^[A-Z]$/.test(itemCode);
                                     const hideNonDescription = isItemPlaceholder(item.item_code);
+                                    const rateValue = String(getBoqCellValue(item, "Rate") ?? "").trim();
+                                    const isRateOnly = rateValue.toLowerCase() === "rate only";
                                     rows.push(
                                       <tr
                                         key={item.id}
-                                        className="matches-table__row"
+                                        className={`matches-table__row${isRateOnly ? " matches-table__row--rate-only" : ""}`}
                                         style={highlightItemCode ? { color: "#72fcd1" } : undefined}
                                       >
                                         {boqColumns.map((col) => (
@@ -1622,7 +1634,7 @@ export default function App() {
                                 const groupRows: ReactNode[] = [
                                   (
                                     <tr key={`drawing-group-${code}`} className="boq-group-row">
-                                <td colSpan={4}>{code}</td>
+                                      <td colSpan={4}>{code}</td>
                                     </tr>
                                   ),
                                 ];

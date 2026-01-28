@@ -46,5 +46,3 @@ ProjectComparisonSchema.index({ userId: 1, projectId: 1 }, { unique: true });
 export const ProjectComparisonModel =
   mongoose.models.ProjectComparison ??
   mongoose.model<ProjectComparisonDocument>("ProjectComparison", ProjectComparisonSchema);
-
-export type { ProjectComparisonDocument };

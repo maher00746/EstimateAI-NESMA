@@ -8,11 +8,6 @@ type BoqFileReviewProps = {
   onSave?: (items: ProjectItem[]) => Promise<void>;
 };
 
-const renderCell = (value: string | number | null | undefined) => {
-  const text = value === null || value === undefined || String(value).trim() === "" ? "—" : String(value);
-  return <span className="cell-text" title={text}>{text}</span>;
-};
-
 const renderEmptyCell = () => <span className="cell-text" />;
 
 const isItemPlaceholder = (value: string | number | null | undefined) =>
@@ -65,7 +60,16 @@ export default function BoqFileReview({ fileName, items, onBack, onSave }: BoqFi
       activeBoqTabId === "all"
         ? localItems
         : localItems.filter((item) => item.metadata?.sheetName === activeBoqTabId.replace(/^sheet:/, ""));
+    const isAll = activeBoqTabId === "all";
     return [...itemsForTab].sort((a, b) => {
+      if (isAll) {
+        const aSheet = a.metadata?.sheetIndex ?? 0;
+        const bSheet = b.metadata?.sheetIndex ?? 0;
+        if (aSheet !== bSheet) return aSheet - bSheet;
+      }
+      const aChunk = a.metadata?.chunkIndex ?? 0;
+      const bChunk = b.metadata?.chunkIndex ?? 0;
+      if (aChunk !== bChunk) return aChunk - bChunk;
       const aIndex = a.metadata?.rowIndex ?? 0;
       const bIndex = b.metadata?.rowIndex ?? 0;
       return aIndex - bIndex;

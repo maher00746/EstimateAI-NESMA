@@ -7,7 +7,7 @@ COPY frontend/package*.json ./
 RUN npm ci
 
 FROM deps AS builder
-ARG VITE_API_URL
+ARG VITE_API_URL=http://backend:4000
 ENV VITE_API_URL=${VITE_API_URL}
 COPY frontend/tsconfig.json frontend/vite.config.ts ./
 COPY frontend/src ./src

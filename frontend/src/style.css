@@ -831,6 +831,34 @@ body {
   z-index: 0 !important;
 }
 
+.pricing-table thead th.pricing-col-sell {
+  background: rgba(98, 132, 255, 0.18);
+  color: rgba(216, 226, 255, 0.95);
+}
+
+.pricing-rate-row th {
+  padding: 0.35rem 0.5rem;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.pricing-rate-input {
+  width: 100%;
+  min-width: 80px;
+  background: rgba(10, 15, 34, 0.75);
+  border: 1px solid rgba(98, 132, 255, 0.4);
+  color: #e3e9ff;
+  padding: 0.3rem 0.4rem;
+  border-radius: 0.35rem;
+  font-size: 0.72rem;
+}
+
+.pricing-rate-input:focus {
+  outline: none;
+  border-color: rgba(98, 132, 255, 0.7);
+  box-shadow: 0 0 0 2px rgba(98, 132, 255, 0.2);
+}
+
 .pricing-col-description {
   min-width: 300px;
   width: 300px;
@@ -1649,23 +1677,26 @@ body {
   max-width: none;
   width: auto;
   background-color: #0b1022;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+  background-image: none;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.65);
   border: 1px solid rgba(114, 252, 209, 0.25);
   border-radius: 8px;
-  z-index: 2147483000;
+  z-index: 2147483647;
   padding: 4px;
   display: flex;
   flex-direction: column;
   gap: 0;
-  max-height: 220px;
+  max-height: 240px;
   overflow-y: auto;
   overflow-x: hidden;
   opacity: 1;
   isolation: isolate;
-  background-clip: padding-box;
   mix-blend-mode: normal;
-  overflow: hidden;
+  backdrop-filter: none;
+  transform: translateZ(0);
+  background-clip: padding-box;
 }
+
 
 .pricing-match-menu::before {
   content: "";
@@ -1687,7 +1718,7 @@ body {
   width: 100%;
   text-align: left;
   border: 1px solid rgba(114, 252, 209, 0.12);
-  background: #0f182c;
+  background-color: #101a30;
   border-radius: 6px;
   padding: 6px 8px;
   font-size: 0.8rem;
@@ -1923,6 +1954,14 @@ body {
 
 .matches-table__row.is-linked:hover {
   background: rgba(255, 59, 212, 0.16);
+}
+
+.matches-table__row--rate-only {
+  background: rgba(255, 153, 51, 0.18);
+}
+
+.matches-table__row--rate-only:hover {
+  background: rgba(255, 153, 51, 0.26);
 }
 
 .table-toolbar {
@@ -2899,19 +2938,40 @@ body {
 }
 
 .pricing-accordion__card {
-  border: 1px solid rgba(114, 252, 209, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 1rem;
-  background: rgba(255, 255, 255, 0.02);
+  background: rgba(255, 255, 255, 0.03);
   overflow: visible;
   transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
   width: 100%;
   position: relative;
 }
 
-.pricing-accordion__card.is-open {
-  background: linear-gradient(145deg, rgba(114, 252, 209, 0.12), rgba(65, 155, 255, 0.12));
-  border-color: rgba(114, 252, 209, 0.45);
-  box-shadow: 0 10px 22px rgba(65, 155, 255, 0.15);
+.pricing-accordion--pricing .pricing-accordion__card {
+  border: 1px solid rgba(241, 196, 15, 0.45);
+  background: rgba(241, 196, 15, 0.08);
+}
+
+.pricing-accordion--pricing .pricing-accordion__card.is-open {
+  background: linear-gradient(145deg, rgba(241, 196, 15, 0.18), rgba(65, 155, 255, 0.12));
+  border-color: rgba(241, 196, 15, 0.65);
+  box-shadow: 0 10px 22px rgba(241, 196, 15, 0.2);
+}
+
+.pricing-accordion--pricing .pricing-accordion__card.is-complete {
+  border-color: rgba(46, 204, 113, 0.6);
+  background: rgba(46, 204, 113, 0.08);
+  box-shadow: 0 8px 18px rgba(46, 204, 113, 0.2);
+}
+
+.pricing-accordion--pricing .pricing-accordion__card.is-complete.is-open {
+  background: linear-gradient(145deg, rgba(46, 204, 113, 0.18), rgba(65, 155, 255, 0.12));
+}
+
+.pricing-accordion__card--summary {
+  border-color: rgba(98, 132, 255, 0.65);
+  background: linear-gradient(135deg, rgba(98, 132, 255, 0.18), rgba(114, 252, 209, 0.12));
+  box-shadow: 0 12px 26px rgba(98, 132, 255, 0.22);
 }
 
 .pricing-accordion__header {
@@ -2930,6 +2990,21 @@ body {
   text-align: left;
 }
 
+.pricing-accordion__header--summary {
+  cursor: default;
+  background: rgba(98, 132, 255, 0.12);
+}
+
+.pricing-accordion__panel--summary {
+  padding: 0 0.75rem 1rem;
+}
+
+.pricing-accordion__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
 .pricing-accordion__header:hover {
   background: transparent;
 }
@@ -2941,6 +3016,32 @@ body {
 
 .pricing-accordion__chevron.is-open {
   transform: rotate(180deg);
+}
+
+.pricing-table-wrapper--summary {
+  padding: 0 0.5rem 0.75rem;
+}
+
+.pricing-table--summary {
+  border: 1px solid rgba(98, 132, 255, 0.35);
+  border-radius: 0.75rem;
+  overflow: hidden;
+  background: rgba(10, 18, 40, 0.6);
+}
+
+.pricing-table--summary th {
+  color: rgba(216, 226, 255, 0.9);
+}
+
+.pricing-summary-row td {
+  font-weight: 700;
+  color: rgba(236, 243, 255, 0.95);
+  background: rgba(98, 132, 255, 0.12);
+}
+
+.pricing-summary-sell {
+  background: rgba(255, 158, 61, 0.22);
+  color: rgba(255, 233, 207, 0.98);
 }
 
 .pricing-accordion__panel {
@@ -3652,6 +3753,26 @@ body.modal-open {
   cursor: pointer;
   line-height: 1;
   padding: 0;
+}
+
+.inline-check-button {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0;
+}
+
+.inline-check-button.is-active {
+  border-color: rgba(46, 204, 113, 0.8);
+  background: rgba(46, 204, 113, 0.2);
+  color: rgba(46, 204, 113, 0.95);
 }
 
 .inline-remove-button {

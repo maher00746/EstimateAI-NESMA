@@ -45,5 +45,3 @@ ProjectExtractJobSchema.index({ projectId: 1, status: 1 });
 export const ProjectExtractJobModel =
   mongoose.models.ProjectExtractJob ??
   mongoose.model<ProjectExtractJobDocument>("ProjectExtractJob", ProjectExtractJobSchema);
-
-export type { ProjectExtractJobDocument };

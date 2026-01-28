@@ -43,5 +43,3 @@ ProjectFileSchema.index({ projectId: 1, createdAt: 1 });
 
 export const ProjectFileModel =
   mongoose.models.ProjectFile ?? mongoose.model<ProjectFileDocument>("ProjectFile", ProjectFileSchema);
-
-export type { ProjectFileDocument };

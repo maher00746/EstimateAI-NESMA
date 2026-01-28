@@ -20,11 +20,19 @@ export const config = {
   // Gemini (Markdown review of drawing files)
   geminiApiKey: process.env.GEMINI_API_KEY ?? "",
   // Use gemini-3-pro-preview for best document understanding (latest as of Jan 2026)
-  geminiModel: process.env.GEMINI_MODEL ?? "gemini-3-pro-preview",
+  geminiModel: (process.env.GEMINI_MODEL && process.env.GEMINI_MODEL.trim())
+    ? process.env.GEMINI_MODEL.trim()
+    : "gemini-3-pro-preview",
   // BOQ Excel extraction (use 2.5 Pro for accuracy)
-  geminiBoqModel: process.env.GEMINI_BOQ_MODEL ?? "gemini-2.5-pro",
+  geminiBoqModel: (process.env.GEMINI_BOQ_MODEL && process.env.GEMINI_BOQ_MODEL.trim())
+    ? process.env.GEMINI_BOQ_MODEL.trim()
+    : "gemini-2.5-pro",
   // Higher thinking budget for complex visual analysis of architectural drawings
-  geminiThinkingBudget: Number(process.env.GEMINI_THINKING_BUDGET ?? 16384),
+  geminiThinkingBudget:
+    Number.isFinite(Number(process.env.GEMINI_THINKING_BUDGET)) &&
+    Number(process.env.GEMINI_THINKING_BUDGET) > 0
+      ? Number(process.env.GEMINI_THINKING_BUDGET)
+      : 16384,
 
   // LandingAI ADE Parse (PDF -> Markdown) to improve Gemini transcription accuracy
   landingAiApiKey: process.env.LANDINGAI_API_KEY ?? "",
