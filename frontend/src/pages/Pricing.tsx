@@ -22,6 +22,8 @@ type PricingProps = {
 type PricingPayloadWithTracking = PricingPayload & {
   collapsedByItemId?: Record<string, unknown>;
   completedByItemId?: Record<string, unknown>;
+  sellRateFactor?: string;
+  sellRateOverridesByItemId?: Record<string, unknown>;
 };
 
 type PricingSubItem = {
@@ -142,6 +144,27 @@ const parseNumber = (value: string | number | null | undefined): number => {
   return Number.isFinite(numberValue) ? numberValue : 0;
 };
 
+const parseStrictNumber = (value: string | number | null | undefined): number | null => {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const cleaned = trimmed.replace(/,/g, "");
+  if (!/^-?\d+(\.\d+)?$/.test(cleaned)) return null;
+  const numberValue = Number(cleaned);
+  return Number.isFinite(numberValue) ? numberValue : null;
+};
+
+const parseThickness = (value: unknown): number | null => {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value === "string") {
+    const strict = parseStrictNumber(value);
+    return strict === null ? null : strict;
+  }
+  return null;
+};
+
 const formatRounded = (value: number): string => {
   if (!Number.isFinite(value)) return "";
   return value.toFixed(2);
@@ -206,11 +229,11 @@ export default function Pricing({
   const [poRate, setPoRate] = useState("8");
   const [mpHourlyRate, setMpHourlyRate] = useState("0");
   const [totalPriceFactor, setTotalPriceFactor] = useState("0");
-  const [sellRateWages, setSellRateWages] = useState("12.14");
-  const [sellRateMaterials, setSellRateMaterials] = useState("12.14");
-  const [sellRateSubcon, setSellRateSubcon] = useState("12.14");
-  const [sellRateEquip, setSellRateEquip] = useState("12.14");
-  const [sellRateOther, setSellRateOther] = useState("12.14");
+  const [projectDuration, setProjectDuration] = useState("2");
+  const [sellRateFactor, setSellRateFactor] = useState("12.14");
+  const [sellRateOverridesByItemId, setSellRateOverridesByItemId] = useState<
+    Record<string, Partial<Record<PricingHeaderRateKey, string>>>
+  >({});
   const [productivityBlocks, setProductivityBlocks] = useState<ProductivityRatesBlock[]>([]);
   const [loadingRates, setLoadingRates] = useState(false);
   const [ratesError, setRatesError] = useState("");
@@ -247,6 +270,9 @@ export default function Pricing({
       poRate,
       mpHourlyRate,
       totalPriceFactor,
+      projectDuration,
+      sellRateFactor,
+      sellRateOverridesByItemId,
       subItemsByItemId,
       autoRowQtyByItemId,
       qtyOverrideByItemId,
@@ -259,6 +285,9 @@ export default function Pricing({
       poRate,
       mpHourlyRate,
       totalPriceFactor,
+      projectDuration,
+      sellRateFactor,
+      sellRateOverridesByItemId,
       subItemsByItemId,
       autoRowQtyByItemId,
       qtyOverrideByItemId,
@@ -275,6 +304,11 @@ export default function Pricing({
       setMpHourlyRate(payload.mpHourlyRate);
     }
     setTotalPriceFactor(payload.totalPriceFactor ?? "0");
+    setProjectDuration(payload.projectDuration ?? "2");
+    setSellRateFactor(payload.sellRateFactor ?? "12.14");
+    setSellRateOverridesByItemId(
+      (payload.sellRateOverridesByItemId as Record<string, Partial<Record<PricingHeaderRateKey, string>>>) ?? {}
+    );
     setSubItemsByItemId((payload.subItemsByItemId as Record<string, PricingSubItem[]>) ?? {});
     setAutoRowQtyByItemId((payload.autoRowQtyByItemId as Record<string, string>) ?? {});
     setQtyOverrideByItemId((payload.qtyOverrideByItemId as Record<string, string>) ?? {});
@@ -738,12 +772,18 @@ export default function Pricing({
                   if (!primaryId || existingIds.has(primaryId)) return null;
                   const option = productivityOptionsById.get(primaryId);
                   if (!option) return null;
+                  const thickValue = parseThickness(item.thick);
+                  const baseQtyValue = parseStrictNumber(defaultQty);
+                  const computedQty =
+                    thickValue !== null && baseQtyValue !== null
+                      ? String(baseQtyValue * thickValue)
+                      : defaultQty;
                   return {
                     id: uuidv4(),
                     description: option.description,
                     productivityId: option.id,
                     suggestedIds: suggestions,
-                    qty: defaultQty,
+                    qty: computedQty,
                     unitMh: option.unitMh,
                     unitWagesRate: option.unitWagesRate,
                     unitEquipRate: option.equipmentRate,
@@ -811,12 +851,21 @@ export default function Pricing({
   const percentValue = parseNumber(percentage) / 100;
   const poRateValue = parseNumber(poRate) / 100;
   const mpHourlyRateValue = parseNumber(mpHourlyRate);
-  const totalPriceFactorValue = parseNumber(totalPriceFactor);
-  const sellRateWagesValue = parseNumber(sellRateWages) / 100;
-  const sellRateMaterialsValue = parseNumber(sellRateMaterials) / 100;
-  const sellRateSubconValue = parseNumber(sellRateSubcon) / 100;
-  const sellRateEquipValue = parseNumber(sellRateEquip) / 100;
-  const sellRateOtherValue = parseNumber(sellRateOther) / 100;
+  const projectDurationValue = parseNumber(projectDuration);
+  const getSellRateInputValue = useCallback(
+    (itemId: string, rateKey: PricingHeaderRateKey) => {
+      const override = sellRateOverridesByItemId[itemId]?.[rateKey];
+      if (override !== undefined && override.trim() !== "") return override;
+      return sellRateFactor;
+    },
+    [sellRateOverridesByItemId, sellRateFactor]
+  );
+
+  const getSellRateValue = useCallback(
+    (itemId: string, rateKey: PricingHeaderRateKey) =>
+      parseNumber(getSellRateInputValue(itemId, rateKey)) / 100,
+    [getSellRateInputValue]
+  );
 
   const summaryTotals = useMemo(() => {
     return pricingBlocks.reduce(
@@ -831,15 +880,18 @@ export default function Pricing({
         const manualTotals = subItems.reduce(
           (manualAcc, row) => {
             const rowQtyValue = parseNumber(row.qty ?? qtyDisplay);
-            const unitMh = row.unitMh;
+            const unitMh = parseNumber(row.unitMh);
             const totalMh = unitMh * rowQtyValue;
-            const unitRateWages = row.unitWagesRate ?? unitMh * mpHourlyRateValue;
+            const unitRateWages =
+              row.unitWagesRate !== undefined
+                ? parseNumber(row.unitWagesRate)
+                : unitMh * mpHourlyRateValue;
             const totalRateWages = unitRateWages * rowQtyValue;
             const unitRateMaterials = parseNumber(row.materialsRate);
             const totalRateMaterials = (unitRateMaterials + unitRateMaterials * poRateValue) * rowQtyValue;
             const unitRateSubcon = parseNumber(row.subconRate);
             const totalRateSubcon = unitRateSubcon * rowQtyValue;
-            const unitRateEquip = row.unitEquipRate;
+            const unitRateEquip = parseNumber(row.unitEquipRate);
             const totalRateEquip = unitRateEquip * rowQtyValue;
             const unitRateTools = parseNumber(row.toolsRate);
             const totalRateTools = unitRateTools * rowQtyValue;
@@ -894,6 +946,11 @@ export default function Pricing({
         const pricedUnitPrice = roundTo2(pricedUnitPriceRaw);
         const pricedTotalPrice = roundTo2(pricedUnitPrice * qtyValue);
 
+        const sellRateWagesValue = getSellRateValue(item.id, "wages");
+        const sellRateMaterialsValue = getSellRateValue(item.id, "materials");
+        const sellRateSubconValue = getSellRateValue(item.id, "subcon");
+        const sellRateEquipValue = getSellRateValue(item.id, "equip");
+        const sellRateOtherValue = getSellRateValue(item.id, "other");
         const sellUnitRateWages = pricedUnitRateWages / (1 - sellRateWagesValue);
         const sellTotalRateWages = sellUnitRateWages * qtyValue;
         const sellUnitRateMaterials = pricedUnitRateMaterials / (1 - sellRateMaterialsValue);
@@ -952,12 +1009,8 @@ export default function Pricing({
     percentValue,
     poRateValue,
     mpHourlyRateValue,
-    sellRateWagesValue,
-    sellRateMaterialsValue,
-    sellRateSubconValue,
-    sellRateEquipValue,
-    sellRateOtherValue,
     isRateOnlyItem,
+    getSellRateValue,
   ]);
 
   const handleSave = useCallback(async (): Promise<boolean> => {
@@ -1029,13 +1082,18 @@ export default function Pricing({
     };
   };
 
-  const rateInputsByKey: Record<PricingHeaderRateKey, { value: string; setValue: (value: string) => void }> = {
-    wages: { value: sellRateWages, setValue: setSellRateWages },
-    materials: { value: sellRateMaterials, setValue: setSellRateMaterials },
-    subcon: { value: sellRateSubcon, setValue: setSellRateSubcon },
-    equip: { value: sellRateEquip, setValue: setSellRateEquip },
-    other: { value: sellRateOther, setValue: setSellRateOther },
-  };
+  const updateSellRateOverride = useCallback(
+    (itemId: string, rateKey: PricingHeaderRateKey, value: string) => {
+      setSellRateOverridesByItemId((current) => ({
+        ...current,
+        [itemId]: {
+          ...(current[itemId] ?? {}),
+          [rateKey]: value,
+        },
+      }));
+    },
+    []
+  );
 
   const getHeaderClassName = (idx: number, header: PricingHeader) => {
     const classes = [];
@@ -1119,6 +1177,18 @@ export default function Pricing({
               type="number"
               value={mpHourlyRate}
               readOnly
+            />
+          </label>
+          <span style={{ opacity: 0.4 }}>|</span>
+          <label className="electrical-input" style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+            <span className="electrical-input__label">Factor</span>
+            <input
+              className="electrical-input__control"
+              type="number"
+              value={sellRateFactor}
+              onChange={(event) => setSellRateFactor(event.target.value)}
+              min={0}
+              step="0.01"
             />
           </label>
         </div>
@@ -1232,15 +1302,18 @@ export default function Pricing({
 
               const manualRows = subItems.map((row) => {
                 const rowQtyValue = parseNumber(row.qty ?? qtyDisplay);
-                const unitMh = row.unitMh;
+                const unitMh = parseNumber(row.unitMh);
                 const totalMh = unitMh * rowQtyValue;
-                const unitRateWages = row.unitWagesRate ?? unitMh * mpHourlyRateValue;
+                const unitRateWages =
+                  row.unitWagesRate !== undefined
+                    ? parseNumber(row.unitWagesRate)
+                    : unitMh * mpHourlyRateValue;
                 const totalRateWages = unitRateWages * rowQtyValue;
                 const unitRateMaterials = parseNumber(row.materialsRate);
                 const totalRateMaterials = (unitRateMaterials + unitRateMaterials * poRateValue) * rowQtyValue;
                 const unitRateSubcon = parseNumber(row.subconRate);
                 const totalRateSubcon = unitRateSubcon * rowQtyValue;
-                const unitRateEquip = row.unitEquipRate;
+                const unitRateEquip = parseNumber(row.unitEquipRate);
                 const totalRateEquip = unitRateEquip * rowQtyValue;
                 const unitRateTools = parseNumber(row.toolsRate);
                 const totalRateTools = unitRateTools * rowQtyValue;
@@ -1324,6 +1397,11 @@ export default function Pricing({
                 pricedUnitRateMaterials;
               const pricedUnitPrice = roundTo2(pricedUnitPriceRaw);
               const pricedTotalPrice = roundTo2(pricedUnitPrice * qtyValue);
+              const sellRateWagesValue = getSellRateValue(item.id, "wages");
+              const sellRateMaterialsValue = getSellRateValue(item.id, "materials");
+              const sellRateSubconValue = getSellRateValue(item.id, "subcon");
+              const sellRateEquipValue = getSellRateValue(item.id, "equip");
+              const sellRateOtherValue = getSellRateValue(item.id, "other");
               const sellUnitRateWages = pricedUnitRateWages / (1 - sellRateWagesValue);
               const sellTotalRateWages = sellUnitRateWages * qtyValue;
               const sellUnitRateMaterials = pricedUnitRateMaterials / (1 - sellRateMaterialsValue);
@@ -1343,10 +1421,11 @@ export default function Pricing({
               const sellUnitPriceRounded = roundTo2(sellUnitPriceRaw);
               const sellTotalPriceRaw = sellUnitPriceRounded * qtyValue;
 
+              const isRateOnly = isRateOnlyItem(item);
               return (
                 <div
                   key={item.id}
-                  className={`pricing-accordion__card${isCollapsed ? "" : " is-open"}${isCompleted ? " is-complete" : ""}`}
+                  className={`pricing-accordion__card${isCollapsed ? "" : " is-open"}${isCompleted ? " is-complete" : ""}${isRateOnly ? " is-rate-only" : ""}`}
                 >
                   <div
                     className="pricing-accordion__header"
@@ -1393,331 +1472,333 @@ export default function Pricing({
                   </div>
                   {!isCollapsed && (
                     <div className="pricing-accordion__panel" id={panelId}>
-                    <div className="pricing-table-wrapper">
-                      <table className="matches-table pricing-table">
-                        <colgroup>
-                          <col style={{ width: "30px" }} />
-                          <col style={{ width: "300px" }} />
-                          {PRICING_HEADERS.slice(2).map((_, idx) => (
-                            <col key={`col-${item.id}-${idx}`} style={{ width: "180px" }} />
-                          ))}
-                        </colgroup>
-                        <thead>
-                          <tr className="pricing-rate-row">
-                            {PRICING_HEADERS.map((header, idx) => {
-                              const rateInput = header.rateKey ? rateInputsByKey[header.rateKey] : null;
-                              return (
-                                <th key={`rate-${item.id}-${header.key}`} className={getHeaderClassName(idx, header)}>
-                                  {rateInput ? (
-                                    <input
-                                      className="pricing-rate-input"
-                                      type="number"
-                                      value={rateInput.value}
-                                      min={0}
-                                      step="0.01"
-                                      onChange={(event) => rateInput.setValue(event.target.value)}
-                                      aria-label={`Sell rate ${header.rateKey} (%)`}
-                                    />
-                                  ) : null}
-                                </th>
-                              );
-                            })}
-                          </tr>
-                          <tr>
-                            {PRICING_HEADERS.map((header, idx) => (
-                              <th
-                                key={`${item.id}-${header.key}`}
-                                className={getHeaderClassName(idx, header)}
-                              >
-                                {header.label}
-                              </th>
+                      <div className="pricing-table-wrapper">
+                        <table className="matches-table pricing-table">
+                          <colgroup>
+                            <col style={{ width: "30px" }} />
+                            <col style={{ width: "300px" }} />
+                            {PRICING_HEADERS.slice(2).map((_, idx) => (
+                              <col key={`col-${item.id}-${idx}`} style={{ width: "180px" }} />
                             ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {noteItems.map((note) => (
-                            <tr key={note.id}>
-                              <td colSpan={PRICING_HEADERS.length}>
-                                <span className="cell-text">{note.description}</span>
-                              </td>
+                          </colgroup>
+                          <thead>
+                            <tr className="pricing-rate-row">
+                              {PRICING_HEADERS.map((header, idx) => {
+                                const rateKey = header.rateKey;
+                                return (
+                                  <th key={`rate-${item.id}-${header.key}`} className={getHeaderClassName(idx, header)}>
+                                    {rateKey ? (
+                                      <input
+                                        className="pricing-rate-input"
+                                        type="number"
+                                        value={getSellRateInputValue(item.id, rateKey)}
+                                        min={0}
+                                        step="0.01"
+                                        onChange={(event) =>
+                                          updateSellRateOverride(item.id, rateKey, event.target.value)
+                                        }
+                                        aria-label={`Sell rate ${rateKey} (%)`}
+                                      />
+                                    ) : null}
+                                  </th>
+                                );
+                              })}
                             </tr>
-                          ))}
-                          <tr>
-                            <td className="pricing-col-code">{item.item_code || "—"}</td>
-                            <td className="pricing-col-description">
-                              <span className="cell-text">{item.description}</span>
-                            </td>
-                            <td>{qtyDisplay || "—"}</td>
-                            <td>{unitDisplay || "—"}</td>
-                            <td>{formatRounded(pricedUnitMh)}</td>
-                            <td>{formatRounded(pricedUnitMh * qtyValue)}</td>
-                            <td>{formatRounded(pricedUnitRateWages)}</td>
-                            <td>{formatRounded(pricedUnitRateWages * qtyValue)}</td>
-                            <td>{formatRounded(pricedUnitRateMaterials)}</td>
-                            <td>{formatRounded(pricedUnitRateMaterials * qtyValue)}</td>
-                            <td>{formatRounded(pricedUnitRateSubcon)}</td>
-                            <td>{formatRounded(pricedUnitRateSubcon * qtyValue)}</td>
-                            <td>{formatRounded(pricedUnitRateEquip)}</td>
-                            <td>{formatRounded(pricedUnitRateEquip * qtyValue)}</td>
-                            <td>{formatRounded(pricedUnitRateTools)}</td>
-                            <td>{formatRounded(pricedUnitRateTools * qtyValue)}</td>
-                            <td>{formatRounded(pricedUnitPrice)}</td>
-                            <td>{formatRounded(pricedTotalPrice)}</td>
-                            <td>{formatRounded(sellUnitRateWages)}</td>
-                            <td>{formatRounded(sellTotalRateWages)}</td>
-                            <td>{formatRounded(sellUnitRateMaterials)}</td>
-                            <td>{formatRounded(sellTotalRateMaterials)}</td>
-                            <td>{formatRounded(sellUnitRateSubcon)}</td>
-                            <td>{formatRounded(sellTotalRateSubcon)}</td>
-                            <td>{formatRounded(sellUnitRateEquip)}</td>
-                            <td>{formatRounded(sellTotalRateEquip)}</td>
-                            <td>{formatRounded(sellUnitRateOther)}</td>
-                            <td>{formatRounded(sellTotalRateOther)}</td>
-                            <td>{formatRounded(sellUnitPriceRounded)}</td>
-                            <td>{formatRounded(sellTotalPriceRaw)}</td>
-                          </tr>
-                          {manualRows.map((row) => {
-                            const query = row.description.trim().toLowerCase();
-                            const hasSuggestedList = (row.suggestedIds?.length ?? 0) > 0;
-                            const showSuggestedList = hasSuggestedList && query.length < 3;
-                            const showSuggestions =
-                              activeRowId === row.id && (showSuggestedList || query.length >= 3);
-                            const matches = showSuggestions
-                              ? showSuggestedList
-                                ? (row.suggestedIds ?? [])
-                                  .map((id) => productivityOptionsById.get(id))
-                                  .filter((option): option is ProductivityOption => Boolean(option))
-                                : productivityOptions
-                                  .filter((option) => option.description.toLowerCase().includes(query))
-                                  .slice(0, 8)
-                              : [];
-                            return (
-                              <tr key={row.id}>
-                                <td className="pricing-col-code">
-                                  <button
-                                    type="button"
-                                    className="inline-remove-button"
-                                    onClick={() => removeSubItem(item.id, row.id)}
-                                    aria-label="Remove sub item"
-                                  >
-                                    −
-                                  </button>
+                            <tr>
+                              {PRICING_HEADERS.map((header, idx) => (
+                                <th
+                                  key={`${item.id}-${header.key}`}
+                                  className={getHeaderClassName(idx, header)}
+                                >
+                                  {header.label}
+                                </th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {noteItems.map((note) => (
+                              <tr key={note.id}>
+                                <td colSpan={PRICING_HEADERS.length}>
+                                  <span className="cell-text">{note.description}</span>
                                 </td>
-                                <td className="pricing-col-description" style={{ position: "relative", overflow: "visible" }}>
-                                  <div className="productivity-cell-with-action" ref={(el) => {
-                                    menuAnchorRefs.current[row.id] = el;
-                                  }}>
+                              </tr>
+                            ))}
+                            <tr>
+                              <td className="pricing-col-code">{item.item_code || "—"}</td>
+                              <td className="pricing-col-description">
+                                <span className="cell-text">{item.description}</span>
+                              </td>
+                              <td>{qtyDisplay || "—"}</td>
+                              <td>{unitDisplay || "—"}</td>
+                              <td>{formatRounded(pricedUnitMh)}</td>
+                              <td>{formatRounded(pricedUnitMh * qtyValue)}</td>
+                              <td>{formatRounded(pricedUnitRateWages)}</td>
+                              <td>{formatRounded(pricedUnitRateWages * qtyValue)}</td>
+                              <td>{formatRounded(pricedUnitRateMaterials)}</td>
+                              <td>{formatRounded(pricedUnitRateMaterials * qtyValue)}</td>
+                              <td>{formatRounded(pricedUnitRateSubcon)}</td>
+                              <td>{formatRounded(pricedUnitRateSubcon * qtyValue)}</td>
+                              <td>{formatRounded(pricedUnitRateEquip)}</td>
+                              <td>{formatRounded(pricedUnitRateEquip * qtyValue)}</td>
+                              <td>{formatRounded(pricedUnitRateTools)}</td>
+                              <td>{formatRounded(pricedUnitRateTools * qtyValue)}</td>
+                              <td>{formatRounded(pricedUnitPrice)}</td>
+                              <td>{formatRounded(pricedTotalPrice)}</td>
+                              <td>{formatRounded(sellUnitRateWages)}</td>
+                              <td>{formatRounded(sellTotalRateWages)}</td>
+                              <td>{formatRounded(sellUnitRateMaterials)}</td>
+                              <td>{formatRounded(sellTotalRateMaterials)}</td>
+                              <td>{formatRounded(sellUnitRateSubcon)}</td>
+                              <td>{formatRounded(sellTotalRateSubcon)}</td>
+                              <td>{formatRounded(sellUnitRateEquip)}</td>
+                              <td>{formatRounded(sellTotalRateEquip)}</td>
+                              <td>{formatRounded(sellUnitRateOther)}</td>
+                              <td>{formatRounded(sellTotalRateOther)}</td>
+                              <td>{formatRounded(sellUnitPriceRounded)}</td>
+                              <td>{formatRounded(sellTotalPriceRaw)}</td>
+                            </tr>
+                            {manualRows.map((row) => {
+                              const query = row.description.trim().toLowerCase();
+                              const hasSuggestedList = (row.suggestedIds?.length ?? 0) > 0;
+                              const showSuggestedList = hasSuggestedList && query.length < 3;
+                              const showSuggestions =
+                                activeRowId === row.id && (showSuggestedList || query.length >= 3);
+                              const matches = showSuggestions
+                                ? showSuggestedList
+                                  ? (row.suggestedIds ?? [])
+                                    .map((id) => productivityOptionsById.get(id))
+                                    .filter((option): option is ProductivityOption => Boolean(option))
+                                  : productivityOptions
+                                    .filter((option) => option.description.toLowerCase().includes(query))
+                                    .slice(0, 8)
+                                : [];
+                              return (
+                                <tr key={row.id}>
+                                  <td className="pricing-col-code">
+                                    <button
+                                      type="button"
+                                      className="inline-remove-button"
+                                      onClick={() => removeSubItem(item.id, row.id)}
+                                      aria-label="Remove sub item"
+                                    >
+                                      −
+                                    </button>
+                                  </td>
+                                  <td className="pricing-col-description" style={{ position: "relative", overflow: "visible" }}>
+                                    <div className="productivity-cell-with-action" ref={(el) => {
+                                      menuAnchorRefs.current[row.id] = el;
+                                    }}>
+                                      <input
+                                        type="text"
+                                        value={row.description}
+                                        onFocus={() => {
+                                          if (row.suggestedIds?.length) {
+                                            setActiveRowId(row.id);
+                                            return;
+                                          }
+                                          if (row.description.trim().length >= 3) {
+                                            setActiveRowId(row.id);
+                                          }
+                                        }}
+                                        onBlur={() => setTimeout(() => setActiveRowId(null), 150)}
+                                        onChange={(event) =>
+                                          updateSubItem(item.id, row.id, (current) => ({
+                                            ...current,
+                                            description: event.target.value,
+                                          }))
+                                        }
+                                        onInput={(event) => {
+                                          const value = (event.target as HTMLInputElement).value.trim();
+                                          if (row.suggestedIds?.length) {
+                                            setActiveRowId(row.id);
+                                            return;
+                                          }
+                                          setActiveRowId(value.length >= 3 ? row.id : null);
+                                        }}
+                                        placeholder="Search productivity rates..."
+                                      />
+                                      {matches.length > 0 && (
+                                        portalTarget
+                                          ? createPortal(
+                                            <div
+                                              className="pricing-match-menu"
+                                              style={getMenuStyle(row.id)}
+                                              ref={(el) => {
+                                                if (activeRowId === row.id) {
+                                                  activeMenuRef.current = el;
+                                                }
+                                              }}
+                                              onWheel={(event) => event.stopPropagation()}
+                                              onScroll={(event) => event.stopPropagation()}
+                                            >
+                                              {matches.map((option) => (
+                                                <button
+                                                  key={option.id}
+                                                  type="button"
+                                                  className={`pricing-match-menu__item${option.id === row.productivityId ? " is-active" : ""}`}
+                                                  onMouseDown={(event) => {
+                                                    event.preventDefault();
+                                                    handleSelectProductivity(item.id, row.id, option.id);
+                                                    setActiveRowId(null);
+                                                  }}
+                                                >
+                                                  {option.description}
+                                                </button>
+                                              ))}
+                                            </div>,
+                                            portalTarget
+                                          )
+                                          : (
+                                            <div
+                                              className="pricing-match-menu"
+                                              style={getMenuStyle(row.id)}
+                                              ref={(el) => {
+                                                if (activeRowId === row.id) {
+                                                  activeMenuRef.current = el;
+                                                }
+                                              }}
+                                              onWheel={(event) => event.stopPropagation()}
+                                              onScroll={(event) => event.stopPropagation()}
+                                            >
+                                              {matches.map((option) => (
+                                                <button
+                                                  key={option.id}
+                                                  type="button"
+                                                  className={`pricing-match-menu__item${option.id === row.productivityId ? " is-active" : ""}`}
+                                                  onMouseDown={(event) => {
+                                                    event.preventDefault();
+                                                    handleSelectProductivity(item.id, row.id, option.id);
+                                                    setActiveRowId(null);
+                                                  }}
+                                                >
+                                                  {option.description}
+                                                </button>
+                                              ))}
+                                            </div>
+                                          )
+                                      )}
+                                    </div>
+                                  </td>
+                                  <td>
                                     <input
                                       type="text"
-                                      value={row.description}
-                                      onFocus={() => {
-                                        if (row.suggestedIds?.length) {
-                                          setActiveRowId(row.id);
-                                          return;
-                                        }
-                                        if (row.description.trim().length >= 3) {
-                                          setActiveRowId(row.id);
-                                        }
-                                      }}
-                                      onBlur={() => setTimeout(() => setActiveRowId(null), 150)}
+                                      inputMode="decimal"
+                                      value={row.qty ?? qtyDisplay}
                                       onChange={(event) =>
                                         updateSubItem(item.id, row.id, (current) => ({
                                           ...current,
-                                          description: event.target.value,
+                                          qty: event.target.value,
                                         }))
                                       }
-                                      onInput={(event) => {
-                                        const value = (event.target as HTMLInputElement).value.trim();
-                                        if (row.suggestedIds?.length) {
-                                          setActiveRowId(row.id);
-                                          return;
-                                        }
-                                        setActiveRowId(value.length >= 3 ? row.id : null);
-                                      }}
-                                      placeholder="Search productivity rates..."
                                     />
-                                    {matches.length > 0 && (
-                                      portalTarget
-                                        ? createPortal(
-                                          <div
-                                            className="pricing-match-menu"
-                                            style={getMenuStyle(row.id)}
-                                            ref={(el) => {
-                                              if (activeRowId === row.id) {
-                                                activeMenuRef.current = el;
-                                              }
-                                            }}
-                                            onWheel={(event) => event.stopPropagation()}
-                                            onScroll={(event) => event.stopPropagation()}
-                                          >
-                                            {matches.map((option) => (
-                                              <button
-                                                key={option.id}
-                                                type="button"
-                                                className={`pricing-match-menu__item${option.id === row.productivityId ? " is-active" : ""}`}
-                                                onMouseDown={(event) => {
-                                                  event.preventDefault();
-                                                  handleSelectProductivity(item.id, row.id, option.id);
-                                                  setActiveRowId(null);
-                                                }}
-                                              >
-                                                {option.description}
-                                              </button>
-                                            ))}
-                                          </div>,
-                                          portalTarget
-                                        )
-                                        : (
-                                          <div
-                                            className="pricing-match-menu"
-                                            style={getMenuStyle(row.id)}
-                                            ref={(el) => {
-                                              if (activeRowId === row.id) {
-                                                activeMenuRef.current = el;
-                                              }
-                                            }}
-                                            onWheel={(event) => event.stopPropagation()}
-                                            onScroll={(event) => event.stopPropagation()}
-                                          >
-                                            {matches.map((option) => (
-                                              <button
-                                                key={option.id}
-                                                type="button"
-                                                className={`pricing-match-menu__item${option.id === row.productivityId ? " is-active" : ""}`}
-                                                onMouseDown={(event) => {
-                                                  event.preventDefault();
-                                                  handleSelectProductivity(item.id, row.id, option.id);
-                                                  setActiveRowId(null);
-                                                }}
-                                              >
-                                                {option.description}
-                                              </button>
-                                            ))}
-                                          </div>
-                                        )
-                                    )}
-                                  </div>
-                                </td>
-                                <td>
-                                  <input
-                                    type="text"
-                                    inputMode="decimal"
-                                    value={row.qty ?? qtyDisplay}
-                                    onChange={(event) =>
-                                      updateSubItem(item.id, row.id, (current) => ({
-                                        ...current,
-                                        qty: event.target.value,
-                                      }))
-                                    }
-                                  />
-                                </td>
-                                <td>{unitDisplay || "—"}</td>
-                                <td>{formatRounded(row.unitMh)}</td>
-                                <td>{formatRounded(row.totalMh)}</td>
-                                <td>{formatRounded(row.unitRateWages)}</td>
-                                <td>{formatRounded(row.totalRateWages)}</td>
-                                <td>
-                                  <input
-                                    type="number"
-                                    value={row.materialsRate}
-                                    onChange={(event) =>
-                                      updateSubItem(item.id, row.id, (current) => ({
-                                        ...current,
-                                        materialsRate: event.target.value,
-                                      }))
-                                    }
-                                  />
-                                </td>
-                                <td>{formatRounded(row.totalRateMaterials)}</td>
-                                <td>
-                                  <input
-                                    type="number"
-                                    value={row.subconRate}
-                                    onChange={(event) =>
-                                      updateSubItem(item.id, row.id, (current) => ({
-                                        ...current,
-                                        subconRate: event.target.value,
-                                      }))
-                                    }
-                                  />
-                                </td>
-                                <td>{formatRounded(row.totalRateSubcon)}</td>
-                                <td>{formatRounded(row.unitRateEquip)}</td>
-                                <td>{formatRounded(row.totalRateEquip)}</td>
-                                <td>
-                                  <input
-                                    type="number"
-                                    value={row.toolsRate}
-                                    onChange={(event) =>
-                                      updateSubItem(item.id, row.id, (current) => ({
-                                        ...current,
-                                        toolsRate: event.target.value,
-                                      }))
-                                    }
-                                  />
-                                </td>
-                                <td>{formatRounded(row.totalRateTools)}</td>
-                                <td>{formatRounded(row.unitPrice)}</td>
-                                <td>{formatRounded(row.totalPrice)}</td>
-                                <td />
-                                <td />
-                                <td />
-                                <td />
-                                <td />
-                                <td />
-                                <td />
-                                <td />
-                                <td />
-                                <td />
-                                <td />
-                                <td />
-                              </tr>
-                            );
-                          })}
-                          <tr>
-                            <td className="pricing-col-code" />
-                            <td className="pricing-col-description">
-                              <span className="cell-text">{`${percentageLabel}% - ${idleText}`}</span>
-                            </td>
-                            <td>
-                              <input
-                                type="number"
-                                value={autoRowQtyByItemId[item.id] ?? "1"}
-                                onChange={(event) => updateAutoQty(item.id, event.target.value)}
-                              />
-                            </td>
-                            <td>ls</td>
-                            <td>{formatRounded(autoUnitMh)}</td>
-                            <td>{formatRounded(autoTotalMh)}</td>
-                            <td>{formatRounded(autoUnitRateWages)}</td>
-                            <td>{formatRounded(autoTotalRateWages)}</td>
-                            <td />
-                            <td />
-                            <td />
-                            <td />
-                            <td>{formatRounded(autoUnitRateEquip)}</td>
-                            <td>{formatRounded(autoTotalRateEquip)}</td>
-                            <td />
-                            <td />
-                            <td>{formatRounded(autoUnitPrice)}</td>
-                            <td>{formatRounded(autoTotalPrice)}</td>
-                            <td />
-                            <td />
-                            <td />
-                            <td />
-                            <td />
-                            <td />
-                            <td />
-                            <td />
-                            <td />
-                            <td />
-                            <td />
-                            <td />
-                          </tr>
-                        </tbody>
-                      </table>
+                                  </td>
+                                  <td>{unitDisplay || "—"}</td>
+                                  <td>{formatRounded(row.unitMh)}</td>
+                                  <td>{formatRounded(row.totalMh)}</td>
+                                  <td>{formatRounded(row.unitRateWages)}</td>
+                                  <td>{formatRounded(row.totalRateWages)}</td>
+                                  <td>
+                                    <input
+                                      type="number"
+                                      value={row.materialsRate}
+                                      onChange={(event) =>
+                                        updateSubItem(item.id, row.id, (current) => ({
+                                          ...current,
+                                          materialsRate: event.target.value,
+                                        }))
+                                      }
+                                    />
+                                  </td>
+                                  <td>{formatRounded(row.totalRateMaterials)}</td>
+                                  <td>
+                                    <input
+                                      type="number"
+                                      value={row.subconRate}
+                                      onChange={(event) =>
+                                        updateSubItem(item.id, row.id, (current) => ({
+                                          ...current,
+                                          subconRate: event.target.value,
+                                        }))
+                                      }
+                                    />
+                                  </td>
+                                  <td>{formatRounded(row.totalRateSubcon)}</td>
+                                  <td>{formatRounded(row.unitRateEquip)}</td>
+                                  <td>{formatRounded(row.totalRateEquip)}</td>
+                                  <td>
+                                    <input
+                                      type="number"
+                                      value={row.toolsRate}
+                                      onChange={(event) =>
+                                        updateSubItem(item.id, row.id, (current) => ({
+                                          ...current,
+                                          toolsRate: event.target.value,
+                                        }))
+                                      }
+                                    />
+                                  </td>
+                                  <td>{formatRounded(row.totalRateTools)}</td>
+                                  <td>{formatRounded(row.unitPrice)}</td>
+                                  <td>{formatRounded(row.totalPrice)}</td>
+                                  <td />
+                                  <td />
+                                  <td />
+                                  <td />
+                                  <td />
+                                  <td />
+                                  <td />
+                                  <td />
+                                  <td />
+                                  <td />
+                                  <td />
+                                  <td />
+                                </tr>
+                              );
+                            })}
+                            <tr>
+                              <td className="pricing-col-code" />
+                              <td className="pricing-col-description">
+                                <span className="cell-text">{`${percentageLabel}% - ${idleText}`}</span>
+                              </td>
+                              <td>
+                                <input
+                                  type="number"
+                                  value={autoRowQtyByItemId[item.id] ?? "1"}
+                                  onChange={(event) => updateAutoQty(item.id, event.target.value)}
+                                />
+                              </td>
+                              <td>ls</td>
+                              <td>{formatRounded(autoUnitMh)}</td>
+                              <td>{formatRounded(autoTotalMh)}</td>
+                              <td>{formatRounded(autoUnitRateWages)}</td>
+                              <td>{formatRounded(autoTotalRateWages)}</td>
+                              <td />
+                              <td />
+                              <td />
+                              <td />
+                              <td>{formatRounded(autoUnitRateEquip)}</td>
+                              <td>{formatRounded(autoTotalRateEquip)}</td>
+                              <td />
+                              <td />
+                              <td>{formatRounded(autoUnitPrice)}</td>
+                              <td>{formatRounded(autoTotalPrice)}</td>
+                              <td />
+                              <td />
+                              <td />
+                              <td />
+                              <td />
+                              <td />
+                              <td />
+                              <td />
+                              <td />
+                              <td />
+                              <td />
+                              <td />
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
-                  </div>
                   )}
                 </div>
               );
@@ -1784,46 +1865,34 @@ export default function Pricing({
                       </tbody>
                     </table>
                   </div>
-                  <div
-                    style={{
-                      display: "flex",
-                      gap: "1rem",
-                      flexWrap: "wrap",
-                      alignItems: "center",
-                      justifyContent: "flex-end",
-                      marginTop: "1rem",
-                    }}
-                  >
-                    <label className="electrical-input" style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                      <span className="electrical-input__label">Total Price Factor</span>
+                  <div className="pricing-summary-foot">
+                    <div className="pricing-summary-foot__label">
+                      <span className="cell-text">Total Working Days</span>
+                    </div>
+                    <div className="pricing-summary-foot__value">
                       <input
                         className="electrical-input__control"
                         type="number"
-                        value={totalPriceFactor}
-                        onChange={(event) => setTotalPriceFactor(event.target.value)}
+                        value={formatRounded(
+                          projectDurationValue ? summaryTotals.totalMh / 160 / projectDurationValue : 0
+                        )}
+                        readOnly
+                        disabled
+                      />
+                    </div>
+                    <div className="pricing-summary-foot__label">
+                      <span className="cell-text">Project Duration</span>
+                    </div>
+                    <div className="pricing-summary-foot__value">
+                      <input
+                        className="electrical-input__control"
+                        type="number"
+                        value={projectDuration}
+                        onChange={(event) => setProjectDuration(event.target.value)}
+                        min={0}
                         step="0.01"
                       />
-                    </label>
-                    <label className="electrical-input" style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                      <span className="electrical-input__label">Selling Price</span>
-                      <input
-                        className="electrical-input__control"
-                        type="number"
-                        value={formatRounded(summaryTotals.sellTotalPrice)}
-                        readOnly
-                        disabled
-                      />
-                    </label>
-                    <label className="electrical-input" style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                      <span className="electrical-input__label">New Selling Price</span>
-                      <input
-                        className="electrical-input__control"
-                        type="number"
-                        value={formatRounded(summaryTotals.sellTotalPrice * (1 + totalPriceFactorValue))}
-                        readOnly
-                        disabled
-                      />
-                    </label>
+                    </div>
                   </div>
                 </div>
               </div>

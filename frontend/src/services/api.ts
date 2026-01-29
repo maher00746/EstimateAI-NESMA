@@ -422,6 +422,7 @@ export interface ProductivitySuggestResponse {
       item: string;
       suggestedIds: string[];
       notes?: string;
+      thick?: number | string;
     }>;
   }>;
   rawContent?: string;

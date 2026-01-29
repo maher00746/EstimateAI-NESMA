@@ -234,6 +234,9 @@ export interface PricingPayload {
   poRate: string;
   mpHourlyRate: string;
   totalPriceFactor?: string;
+  projectDuration?: string;
+  sellRateFactor?: string;
+  sellRateOverridesByItemId?: Record<string, Partial<Record<string, string>>>;
   subItemsByItemId: Record<string, unknown>;
   autoRowQtyByItemId: Record<string, unknown>;
   qtyOverrideByItemId?: Record<string, unknown>;
