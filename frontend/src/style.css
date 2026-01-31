@@ -592,6 +592,15 @@ body {
   transform: none;
 }
 
+.panel__checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  color: rgba(227, 233, 255, 0.7);
+  font-size: 0.95rem;
+}
+
 .dropzone {
   display: block;
   padding: 1rem 1.25rem;
@@ -607,6 +616,14 @@ body {
 .dropzone:hover {
   background: rgba(114, 252, 209, 0.05);
   border-color: rgba(114, 252, 209, 0.5);
+}
+
+.dropzone.is-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+  background: rgba(255, 255, 255, 0.02);
+  border-color: rgba(255, 255, 255, 0.15);
 }
 
 .dropzone input[type="file"] {
@@ -3259,7 +3276,7 @@ body.modal-open {
   border: 1px solid rgba(114, 252, 209, 0.15);
   border-radius: 0.75rem;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
-  margin: 0.75rem 0 1rem;
+  margin: 0 0 1rem;
   width: 100%;
   box-sizing: border-box;
   align-self: stretch;
@@ -3273,7 +3290,7 @@ body.modal-open {
   gap: 0.9rem;
   overflow-x: auto;
   overflow-y: auto;
-  margin: 1.5rem 0;
+  margin: 0 0 1rem;
 }
 
 .stepper--compact {

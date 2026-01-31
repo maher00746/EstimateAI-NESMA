@@ -126,7 +126,6 @@ router.post("/suggest-productivity", async (req: AuthRequest, res: Response, nex
         itemCode: String(block.itemCode ?? "").trim(),
         description: String(block.description ?? "").trim(),
         qty: String(block.qty ?? "").trim(),
-        notes: Array.isArray(block.notes) ? block.notes.map((note: unknown) => String(note ?? "").trim()).filter(Boolean) : [],
         drawingDetails: Array.isArray(block.drawingDetails)
           ? block.drawingDetails.map((detail: unknown) => String(detail ?? "").trim()).filter(Boolean)
           : [],

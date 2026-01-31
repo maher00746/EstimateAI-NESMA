@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
 import { v4 as uuidv4 } from "uuid";
-import type { PricingPayload, ProductivityRatesBlock, ProjectItem } from "../types";
+import type { EstimationRow, PricingPayload, ProductivityRatesBlock, ProjectItem } from "../types";
 import { getPricing, getProductivityRates, savePricing, suggestProductivityItems } from "../services/api";
 import type { ProductivitySuggestResponse } from "../services/api";
 
@@ -13,10 +13,9 @@ type PricingProps = {
   projectName?: string;
   projectId?: string;
   headerTop?: ReactNode;
-  initialPricing?: PricingPayload | null;
-  onPricingLoaded?: (payload: PricingPayload) => void;
   onDirtyChange?: (isDirty: boolean) => void;
   onRegisterSave?: (save: () => Promise<boolean>) => void;
+  onGoToEstimation?: (rows: EstimationRow[]) => void;
 };
 
 type PricingPayloadWithTracking = PricingPayload & {
@@ -219,10 +218,9 @@ export default function Pricing({
   projectName,
   projectId,
   headerTop,
-  initialPricing,
-  onPricingLoaded,
   onDirtyChange,
   onRegisterSave,
+  onGoToEstimation,
 }: PricingProps) {
   const [percentage, setPercentage] = useState("10");
   const [idleText, setIdleText] = useState("idle time");
@@ -255,11 +253,12 @@ export default function Pricing({
   const [suggestionCallsTotal, setSuggestionCallsTotal] = useState(0);
   const [suggestionCallsCompleted, setSuggestionCallsCompleted] = useState(0);
   const [showSuggestionLogs, setShowSuggestionLogs] = useState(false);
+  const [isDirty, setIsDirty] = useState(false);
   const subItemsByItemIdRef = useRef<Record<string, PricingSubItem[]>>({});
   const lastSavedSnapshotRef = useRef<string>("");
-  const pricingLoadedRef = useRef(false);
-  const lastProjectIdRef = useRef<string | undefined>(undefined);
   const initializingRef = useRef(false);
+  const lastLoadedProjectIdRef = useRef<string | undefined>(undefined);
+  const autoUpdateRef = useRef(false);
   const portalTarget = typeof document !== "undefined" ? document.body : null;
   const activeMenuRef = useRef<HTMLDivElement | null>(null);
 
@@ -331,41 +330,30 @@ export default function Pricing({
   }, []);
 
   useEffect(() => {
-    if (lastProjectIdRef.current !== projectId) {
-      lastProjectIdRef.current = projectId;
-      pricingLoadedRef.current = false;
-      lastSavedSnapshotRef.current = "";
-    }
     if (!projectId) return;
-    if (initialPricing && !pricingLoadedRef.current) {
-      initializingRef.current = true;
-      applyPricingPayload(initialPricing);
-      lastSavedSnapshotRef.current = JSON.stringify(initialPricing);
-      pricingLoadedRef.current = true;
-      onDirtyChange?.(false);
-      return;
-    }
-    if (pricingLoadedRef.current) return;
+    if (lastLoadedProjectIdRef.current === projectId) return;
+    lastLoadedProjectIdRef.current = projectId;
     setLoadingPricing(true);
+    lastSavedSnapshotRef.current = "";
     getPricing(projectId)
       .then((payload) => {
         initializingRef.current = true;
         applyPricingPayload(payload);
         lastSavedSnapshotRef.current = JSON.stringify(payload);
-        pricingLoadedRef.current = true;
-        onPricingLoaded?.(payload);
         onDirtyChange?.(false);
+        setIsDirty(false);
       })
       .catch(() => {
         if (!lastSavedSnapshotRef.current) {
           lastSavedSnapshotRef.current = JSON.stringify(buildPricingPayload());
           onDirtyChange?.(false);
+          setIsDirty(false);
         }
         initializingRef.current = false;
         // ignore load errors; page can still be edited
       })
       .finally(() => setLoadingPricing(false));
-  }, [projectId, initialPricing, applyPricingPayload, onDirtyChange, onPricingLoaded, buildPricingPayload]);
+  }, [projectId, applyPricingPayload, onDirtyChange, buildPricingPayload]);
 
   useEffect(() => {
     subItemsByItemIdRef.current = subItemsByItemId;
@@ -462,6 +450,9 @@ export default function Pricing({
         });
         next[itemId] = updatedRows;
       });
+      if (changed) {
+        autoUpdateRef.current = true;
+      }
       return changed ? next : current;
     });
   }, [productivityOptions]);
@@ -568,6 +559,7 @@ export default function Pricing({
     const payload = buildPricingPayload();
     lastSavedSnapshotRef.current = JSON.stringify(payload);
     onDirtyChange?.(false);
+    setIsDirty(false);
     initializingRef.current = false;
   }, [pricedItems, subItemsByItemId, autoRowQtyByItemId, buildPricingPayload, onDirtyChange]);
 
@@ -691,8 +683,6 @@ export default function Pricing({
 
     const suggestionBlocks = pricingBlocks.map((entry) => {
       const description = entry.item.description ?? "";
-      const lastNote = entry.notes.length > 0 ? entry.notes[entry.notes.length - 1] : null;
-      const notes = lastNote?.description ? [lastNote.description].filter((value) => value && value.trim()) : [];
       const baseQty = getBoqFieldValue(entry.item, "qty");
       const qty = String(qtyOverrideByItemId[entry.item.id] ?? baseQty ?? "").trim();
       const scheduleCodes = findScheduleCodes(description);
@@ -711,7 +701,6 @@ export default function Pricing({
         itemCode: String(entry.item.item_code ?? "").trim(),
         description,
         qty,
-        notes,
         drawingDetails,
         scheduleCodes,
       };
@@ -866,6 +855,145 @@ export default function Pricing({
       parseNumber(getSellRateInputValue(itemId, rateKey)) / 100,
     [getSellRateInputValue]
   );
+
+  const buildEstimationRows = useCallback((): EstimationRow[] => {
+    return pricingBlocks.flatMap((entry) => {
+      const item = entry.item;
+      const category = (item.metadata?.category ?? "").trim() || "Uncategorized";
+      const subcategory = (item.metadata?.subcategory ?? "").trim() || "";
+      const noteRows: EstimationRow[] = entry.notes.map((note) => ({
+        id: `note-${note.id}`,
+        type: "description",
+        itemCode: "",
+        category,
+        subcategory,
+        description: note.description?.trim() ? note.description : "—",
+      }));
+
+      const baseQtyDisplay = getBoqFieldValue(item, "qty");
+      const qtyDisplay = qtyOverrideByItemId[item.id] ?? baseQtyDisplay;
+      const unitDisplay = getBoqFieldValue(item, "unit");
+      const qtyValue = parseNumber(qtyDisplay);
+      const subItems = subItemsByItemId[item.id] ?? [];
+
+      const manualRows = subItems.map((row) => {
+        const rowQtyValue = parseNumber(row.qty ?? qtyDisplay);
+        const unitMh = parseNumber(row.unitMh);
+        const totalMh = unitMh * rowQtyValue;
+        const unitRateWages =
+          row.unitWagesRate !== undefined
+            ? parseNumber(row.unitWagesRate)
+            : unitMh * mpHourlyRateValue;
+        const totalRateWages = unitRateWages * rowQtyValue;
+        const unitRateMaterials = parseNumber(row.materialsRate);
+        const totalRateMaterials = (unitRateMaterials + unitRateMaterials * poRateValue) * rowQtyValue;
+        const unitRateSubcon = parseNumber(row.subconRate);
+        const totalRateSubcon = unitRateSubcon * rowQtyValue;
+        const unitRateEquip = parseNumber(row.unitEquipRate);
+        const totalRateEquip = unitRateEquip * rowQtyValue;
+        const unitRateTools = parseNumber(row.toolsRate);
+        const totalRateTools = unitRateTools * rowQtyValue;
+        return {
+          totalMh,
+          totalRateWages,
+          totalRateMaterials,
+          totalRateSubcon,
+          totalRateEquip,
+          totalRateTools,
+        };
+      });
+
+      const manualTotals = manualRows.reduce(
+        (acc, row) => ({
+          totalMh: acc.totalMh + row.totalMh,
+          totalRateWages: acc.totalRateWages + row.totalRateWages,
+          totalRateMaterials: acc.totalRateMaterials + row.totalRateMaterials,
+          totalRateSubcon: acc.totalRateSubcon + row.totalRateSubcon,
+          totalRateEquip: acc.totalRateEquip + row.totalRateEquip,
+          totalRateTools: acc.totalRateTools + row.totalRateTools,
+        }),
+        {
+          totalMh: 0,
+          totalRateWages: 0,
+          totalRateMaterials: 0,
+          totalRateSubcon: 0,
+          totalRateEquip: 0,
+          totalRateTools: 0,
+        }
+      );
+
+      const autoQty = parseNumber(autoRowQtyByItemId[item.id] ?? "1");
+      const autoUnitMh = manualTotals.totalMh * percentValue;
+      const autoTotalMh = autoUnitMh * autoQty;
+      const autoUnitRateWages = autoUnitMh * mpHourlyRateValue;
+      const autoTotalRateWages = autoUnitRateWages * autoQty;
+      const autoUnitRateEquip = manualTotals.totalRateEquip * percentValue;
+      const autoTotalRateEquip = autoUnitRateEquip * autoQty;
+
+      const totalsWithAuto = {
+        totalMh: manualTotals.totalMh + autoTotalMh,
+        totalRateWages: manualTotals.totalRateWages + autoTotalRateWages,
+        totalRateMaterials: manualTotals.totalRateMaterials,
+        totalRateSubcon: manualTotals.totalRateSubcon,
+        totalRateEquip: manualTotals.totalRateEquip + autoTotalRateEquip,
+        totalRateTools: manualTotals.totalRateTools,
+      };
+
+      const pricedUnitMh = qtyValue ? totalsWithAuto.totalMh / qtyValue : 0;
+      const pricedUnitRateWages = pricedUnitMh * mpHourlyRateValue;
+      const pricedUnitRateMaterials = qtyValue ? totalsWithAuto.totalRateMaterials / qtyValue : 0;
+      const pricedUnitRateSubcon = qtyValue ? totalsWithAuto.totalRateSubcon / qtyValue : 0;
+      const pricedUnitRateEquip = qtyValue ? totalsWithAuto.totalRateEquip / qtyValue : 0;
+      const pricedUnitRateTools = qtyValue ? totalsWithAuto.totalRateTools / qtyValue : 0;
+      const sellRateWagesValue = getSellRateValue(item.id, "wages");
+      const sellRateMaterialsValue = getSellRateValue(item.id, "materials");
+      const sellRateSubconValue = getSellRateValue(item.id, "subcon");
+      const sellRateEquipValue = getSellRateValue(item.id, "equip");
+      const sellRateOtherValue = getSellRateValue(item.id, "other");
+      const sellUnitRateWages = pricedUnitRateWages / (1 - sellRateWagesValue);
+      const sellUnitRateMaterials = pricedUnitRateMaterials / (1 - sellRateMaterialsValue);
+      const sellUnitRateSubcon = pricedUnitRateSubcon / (1 - sellRateSubconValue);
+      const sellUnitRateEquip = pricedUnitRateEquip / (1 - sellRateEquipValue);
+      const sellUnitRateOther = pricedUnitRateTools / (1 - sellRateOtherValue);
+      const sellUnitPriceRaw =
+        sellUnitRateWages +
+        sellUnitRateMaterials +
+        sellUnitRateSubcon +
+        sellUnitRateEquip +
+        sellUnitRateOther;
+      const sellUnitPriceRounded = roundTo2(sellUnitPriceRaw);
+      const sellTotalPriceRaw = sellUnitPriceRounded * qtyValue;
+
+      const pricedRow: EstimationRow = {
+        id: `priced-${item.id}`,
+        type: "priced",
+        itemCode: item.item_code?.trim() ? item.item_code : "—",
+        category,
+        subcategory,
+        description: item.description?.trim() ? item.description : "—",
+        qty: qtyDisplay?.trim() ? qtyDisplay : "—",
+        unit: unitDisplay?.trim() ? unitDisplay : "—",
+        rate: formatRounded(sellUnitPriceRounded),
+        amount: formatRounded(sellTotalPriceRaw),
+      };
+
+      return [...noteRows, pricedRow];
+    });
+  }, [
+    pricingBlocks,
+    qtyOverrideByItemId,
+    subItemsByItemId,
+    autoRowQtyByItemId,
+    percentValue,
+    poRateValue,
+    mpHourlyRateValue,
+    getSellRateValue,
+  ]);
+
+  const handleGoToEstimation = useCallback(() => {
+    if (!onGoToEstimation) return;
+    onGoToEstimation(buildEstimationRows());
+  }, [buildEstimationRows, onGoToEstimation]);
 
   const summaryTotals = useMemo(() => {
     return pricingBlocks.reduce(
@@ -1025,8 +1153,8 @@ export default function Pricing({
     try {
       await savePricing(projectId, payload);
       lastSavedSnapshotRef.current = JSON.stringify(payload);
-      onPricingLoaded?.(payload);
       onDirtyChange?.(false);
+      setIsDirty(false);
       setSaveMessage("Saved.");
       setTimeout(() => setSaveMessage(""), 3000);
       return true;
@@ -1036,7 +1164,7 @@ export default function Pricing({
     } finally {
       setSaving(false);
     }
-  }, [projectId, buildPricingPayload, onPricingLoaded, onDirtyChange]);
+  }, [projectId, buildPricingPayload, onDirtyChange]);
 
   useEffect(() => {
     onRegisterSave?.(handleSave);
@@ -1044,9 +1172,18 @@ export default function Pricing({
 
   useEffect(() => {
     const currentSnapshot = JSON.stringify(buildPricingPayload());
+    if (loadingPricing || initializingRef.current) return;
+    if (autoUpdateRef.current) {
+      lastSavedSnapshotRef.current = currentSnapshot;
+      onDirtyChange?.(false);
+      setIsDirty(false);
+      autoUpdateRef.current = false;
+      return;
+    }
     const isDirty = currentSnapshot !== lastSavedSnapshotRef.current;
     onDirtyChange?.(isDirty);
-  }, [buildPricingPayload, onDirtyChange]);
+    setIsDirty(isDirty);
+  }, [buildPricingPayload, onDirtyChange, loadingPricing]);
 
   useEffect(() => {
     if (!activeRowId) return;
@@ -1192,13 +1329,26 @@ export default function Pricing({
             />
           </label>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "1rem", justifyContent: "flex-end" }}>
-          <button type="button" className="btn-match" onClick={handleSave} disabled={saving || !projectId}>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "1rem", justifyContent: "flex-end", flexWrap: "wrap" }}>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={handleGoToEstimation}
+            disabled={pricingBlocks.length === 0}
+          >
+            Go to Estimation
+          </button>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={handleSave}
+            disabled={saving || !projectId || !isDirty}
+          >
             {saving ? "Saving..." : "Save"}
           </button>
           <button
             type="button"
-            className="btn-match"
+            className="btn-secondary"
             onClick={() => void handleAutoSuggest()}
             disabled={suggestionStatus === "running" || productivitySuggestionItems.length === 0 || pricingBlocks.length === 0}
           >

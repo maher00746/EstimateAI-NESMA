@@ -183,7 +183,7 @@ export default function ComparePage({
             className="btn-secondary btn-compact btn-muted"
             onClick={onNext}
           >
-            Go to Finalize
+            Go to Pricing
           </button>
         </div>
 

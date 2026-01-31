@@ -11,7 +11,6 @@ export type ProductivitySuggestBlock = {
   itemCode: string;
   description: string;
   qty?: string;
-  notes: string[];
   drawingDetails: string[];
   scheduleCodes: string[];
 };
@@ -21,7 +20,6 @@ export type ProductivitySuggestResult = {
   items: Array<{
     item: string;
     suggestedIds: string[];
-    notes?: string;
     thick?: number | "";
   }>;
 };
@@ -42,11 +40,11 @@ Rules:
 - Use ONLY the provided productivity items list.
 - CRITICAL: if blocks expicitly including Excavation of material AND qty is present as a number, return ALL items from the productivity items list related to excavation (prioretize the item "SHALLOW EXCAVATION"), if no qty, don't include any items related to excavation.
 - CRITICAL: if blocks expicitly including Disposal of material AND qty is present as a number, return ALL items from the productivity items list related to Disposal (prioretize the item "REMOVAL OF MATERIALS"), if no qty, don't include any items related to Disposal.
-- Base your decision on the block description, qty, notes, drawing details, and schedule codes.
+- Base your decision on the block description, qty, drawing details, and schedule codes.
 - Return ALL suggestions that fit the block details for each required item, sorted best match first.
 - If you are not confident about an item, return an empty list for that item.
 - Do NOT invent items or IDs.
-- For EACH returned item, include a "thick" attribute. If the item explicitly mentions thickness, AND ONLY IF the item is (COMPACTED GRAVEL BASE or GROUT or SAND BEDDING) ,return it in meters as a number (no unit). Otherwise return an empty string.
+- CRITICAL: For EACH returned item, include a "thick" attribute. If the item explicitly mentions thickness, AND ONLY IF the item is (COMPACTED GRAVEL BASE or GROUT or SAND BEDDING), extract the  thickness from the block description, be accurate, don't make up the thickness, if not present, return an empty string.
 - CRITICAL: For PAVER items (PAVING), return an empty  "thick" attribute.
 - Thickness example: "PV-02; 100mm thick of crushed stone" => 0.1, "150mm thick aggregate road base CBR" => 0.15
 
@@ -59,7 +57,6 @@ Return JSON only in this exact structure:
         {
           "item": "<required item name>",
           "suggested_ids": ["<productivity_id_1>", "<productivity_id_2>"],
-          "notes": "<optional brief rationale>",
           "thick": "<number in meters or empty string>"
         }
       ]
@@ -156,9 +153,8 @@ export async function suggestProductivityForPricing(
                 .filter((value: string) => value && validIds.has(value))
             )
           );
-          const notes = typeof itemEntry.notes === "string" ? itemEntry.notes : undefined;
           const thick = parseThicknessValue(itemEntry.thick);
-          return { item, suggestedIds, notes, thick };
+          return { item, suggestedIds, thick };
         })
         .filter(Boolean) as ProductivitySuggestResult["items"];
       return { blockId, items };

@@ -5,6 +5,19 @@ export interface AttributeValue {
 
 export type EstimateStep = "upload" | "review" | "compare" | "finalize" | "pricing" | "estimate";
 
+export type EstimationRow = {
+  id: string;
+  type: "description" | "priced";
+  itemCode?: string;
+  category?: string;
+  subcategory?: string;
+  description: string;
+  qty?: string;
+  unit?: string;
+  rate?: string;
+  amount?: string;
+};
+
 export interface ExtractedItem {
   landing_ai_id?: string | null;
   section_code?: string;

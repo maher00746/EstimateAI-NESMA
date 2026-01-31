@@ -405,7 +405,6 @@ export interface ProductivitySuggestBlock {
   itemCode: string;
   description: string;
   qty?: string;
-  notes: string[];
   drawingDetails: string[];
   scheduleCodes: string[];
 }
@@ -421,7 +420,6 @@ export interface ProductivitySuggestResponse {
     items: Array<{
       item: string;
       suggestedIds: string[];
-      notes?: string;
       thick?: number | string;
     }>;
   }>;

@@ -7,11 +7,11 @@ import ScheduleFileReview from "./pages/ScheduleFileReview";
 import Pricing from "./pages/Pricing";
 import ProductivityRates from "./pages/ProductivityRates";
 import ComparePage from "./pages/ComparePage";
-import type { CadExtractionItem, PricingPayload, ProjectFile, ProjectItem, ProjectLog, ProjectSummary } from "./types";
+import Estimation from "./pages/Estimation";
+import type { CadExtractionItem, EstimationRow, ProjectFile, ProjectItem, ProjectLog, ProjectSummary } from "./types";
 import {
   addProjectFileItem,
   createProject,
-  getPricing,
   listProjectFileItems,
   listProjectFiles,
   listProjectItems,
@@ -35,7 +35,7 @@ type AppPage =
   | "schedule-review"
   | "boq-review"
   | "compare"
-  | "finalize"
+  | "estimation"
   | "productivity-rates"
   | "pricing";
 
@@ -93,6 +93,7 @@ export default function App() {
   const [drawings, setDrawings] = useState<File[]>([]);
   const [scheduleFiles, setScheduleFiles] = useState<File[]>([]);
   const [boqFile, setBoqFile] = useState<File | null>(null);
+  const [isLumpSumProject, setIsLumpSumProject] = useState(false);
   const [projectNameInput, setProjectNameInput] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<ProjectSummary | null>(null);
   const [deletingProject, setDeletingProject] = useState(false);
@@ -116,11 +117,10 @@ export default function App() {
   const [activeBoqTab, setActiveBoqTab] = useState<string>("all");
   const [activeDrawingTab, setActiveDrawingTab] = useState<string>("all");
   const [activeScheduleTab, setActiveScheduleTab] = useState<string>("all");
-  const [pricingCacheByProject, setPricingCacheByProject] = useState<Record<string, PricingPayload | null>>({});
   const [pricingDirty, setPricingDirty] = useState(false);
   const pricingSaveRef = useRef<null | (() => Promise<boolean>)>(null);
+  const [estimationRowsByProject, setEstimationRowsByProject] = useState<Record<string, EstimationRow[]>>({});
   const [unsavedDialogContext, setUnsavedDialogContext] = useState<"productivity" | "pricing" | null>(null);
-  const activePricingCache = activeProject ? pricingCacheByProject[activeProject.id] : null;
   const [compareForceNextRun, setCompareForceNextRun] = useState(false);
   type ReviewAccordionKey = "projectFiles" | "boq" | "schedule" | "drawings";
   const [openAccordions, setOpenAccordions] = useState<Record<ReviewAccordionKey, boolean>>({
@@ -132,6 +132,7 @@ export default function App() {
 
   const [pendingPageChange, setPendingPageChange] = useState<AppPage | null>(null);
   const [unsavedDialogOpen, setUnsavedDialogOpen] = useState(false);
+  const activeEstimationRows = activeProject ? estimationRowsByProject[activeProject.id] ?? [] : [];
 
   const requestPageChange = useCallback(
     (nextPage: AppPage) => {
@@ -216,15 +217,7 @@ export default function App() {
     if (files.length > 0) {
       setMaxStepReached((prev) => Math.max(prev, 1));
     }
-    if (!pricingCacheByProject[projectId]) {
-      try {
-        const pricing = await getPricing(projectId);
-        setPricingCacheByProject((prev) => ({ ...prev, [projectId]: pricing }));
-      } catch {
-        // ignore missing pricing data
-      }
-    }
-  }, [pricingCacheByProject]);
+  }, []);
 
   useEffect(() => {
     if (activeProject) {
@@ -307,6 +300,7 @@ export default function App() {
       setDrawings([]);
       setScheduleFiles([]);
       setBoqFile(null);
+      setIsLumpSumProject(false);
       requestPageChange("upload");
       setMaxStepReached(0);
       void refreshProjects();
@@ -314,6 +308,16 @@ export default function App() {
       setFeedback((error as Error).message || "Failed to create project.");
     }
   }, [refreshProjects]);
+
+  const handleLumpSumChange = useCallback((checked: boolean) => {
+    setIsLumpSumProject(checked);
+    if (checked) {
+      setDrawings([]);
+      setScheduleFiles([]);
+      setAddDrawings([]);
+      setAddSchedules([]);
+    }
+  }, []);
 
   const handleOpenProject = useCallback(async (project: ProjectSummary) => {
     setOpeningProject(true);
@@ -586,7 +590,6 @@ export default function App() {
       { id: "upload", label: "Upload", description: "Drawings & BOQ" },
       { id: "review", label: "Review", description: "Check items" },
       { id: "compare", label: "Compare", description: "BOQ vs drawings" },
-      { id: "finalize", label: "Finalize", description: "Manual edits" },
       { id: "pricing", label: "Pricing", description: "Review prices" },
       { id: "estimation", label: "Estimation", description: "Generate estimate" },
     ],
@@ -601,8 +604,8 @@ export default function App() {
     if (activePage === "schedule-review") return "review";
     if (activePage === "boq-review") return "review";
     if (activePage === "compare") return "compare";
-    if (activePage === "finalize") return "finalize";
     if (activePage === "pricing") return "pricing";
+    if (activePage === "estimation") return "estimation";
     return null;
   }, [activePage]);
 
@@ -622,8 +625,9 @@ export default function App() {
     upload: "upload",
     review: "extract",
     compare: "compare",
-    finalize: "finalize",
     pricing: "pricing",
+    estimation: "estimation",
+    finalize: "pricing",
   };
 
   useEffect(() => {
@@ -729,9 +733,8 @@ export default function App() {
     const hasSchedule = scheduleItems.length > 0;
     if (hasBoq && (hasDrawing || hasSchedule)) reached = Math.max(reached, 2);
     if (projectItems.length > 0) reached = Math.max(reached, 3);
-    if (activePricingCache) reached = Math.max(reached, 4);
     setMaxStepReached((prev) => Math.max(prev, reached));
-  }, [activeProject, projectFiles.length, boqItems.length, drawingItems.length, scheduleItems.length, projectItems.length, activePricingCache]);
+  }, [activeProject, projectFiles.length, boqItems.length, drawingItems.length, scheduleItems.length, projectItems.length]);
   const drawingTabs = useMemo(() => {
     const drawingFiles = projectFiles.filter((file) => file.fileType === "drawing");
     return [
@@ -1123,15 +1126,23 @@ export default function App() {
             projectName={activeProject?.name}
             projectId={activeProject?.id}
             headerTop={renderStepper()}
-            initialPricing={activePricingCache}
-            onPricingLoaded={(payload) => {
-              if (!activeProject) return;
-              setPricingCacheByProject((prev) => ({ ...prev, [activeProject.id]: payload }));
-            }}
             onDirtyChange={(dirty) => setPricingDirty(dirty)}
             onRegisterSave={(save) => {
               pricingSaveRef.current = save;
             }}
+            onGoToEstimation={(rows) => {
+              if (!activeProject) return;
+              setEstimationRowsByProject((prev) => ({ ...prev, [activeProject.id]: rows }));
+              requestPageChange("estimation");
+            }}
+          />
+        )}
+
+        {activePage === "estimation" && activeProject && (
+          <Estimation
+            rows={activeEstimationRows}
+            projectName={activeProject.name}
+            headerTop={renderStepper()}
           />
         )}
 
@@ -1168,12 +1179,24 @@ export default function App() {
                   />
                 </label>
               </div>
+              <label className="panel__checkbox">
+                <input
+                  type="checkbox"
+                  checked={isLumpSumProject}
+                  onChange={(event) => handleLumpSumChange(event.target.checked)}
+                />
+                <span>Lump Sum project (BOQ only)</span>
+              </label>
               <div className="uploaders-grid">
-                <label className="dropzone dropzone--estimate uploader-card">
+                <label
+                  className={`dropzone dropzone--estimate uploader-card${isLumpSumProject ? " is-disabled" : ""}`}
+                  aria-disabled={isLumpSumProject}
+                >
                   <input
                     type="file"
                     multiple
                     accept=".pdf,.png,.jpg,.jpeg,.webp"
+                    disabled={isLumpSumProject}
                     onChange={(event) => setDrawings(Array.from(event.target.files ?? []))}
                   />
                   <div className="dropzone__content">
@@ -1187,11 +1210,15 @@ export default function App() {
                     <p className="dropzone__hint">PDF or image files.</p>
                   </div>
                 </label>
-                <label className="dropzone dropzone--estimate uploader-card">
+                <label
+                  className={`dropzone dropzone--estimate uploader-card${isLumpSumProject ? " is-disabled" : ""}`}
+                  aria-disabled={isLumpSumProject}
+                >
                   <input
                     type="file"
                     multiple
                     accept=".pdf,.xlsx,.xls,.csv,.docx,.txt"
+                    disabled={isLumpSumProject}
                     onChange={(event) => setScheduleFiles(Array.from(event.target.files ?? []))}
                   />
                   <div className="dropzone__content">
@@ -1791,36 +1818,11 @@ export default function App() {
         {activePage === "compare" && activeProject && (
           <ComparePage
             projectId={activeProject.id}
-            onNext={() => requestPageChange("finalize")}
+            onNext={() => requestPageChange("pricing")}
             headerTop={renderStepper()}
             forceRefresh={compareForceNextRun}
             onConsumeForce={() => setCompareForceNextRun(false)}
           />
-        )}
-
-        {activePage === "finalize" && activeProject && (
-          <section className="panel">
-            <div className="panel__header panel__header--review">
-              <div className="stepper-container">
-                {renderStepper()}
-                <h2 style={{ marginTop: "0.5rem" }}>Finalize</h2>
-              </div>
-            </div>
-            <div className="panel__body">
-              <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "1rem" }}>
-                <button
-                  type="button"
-                  className="btn-secondary btn-compact btn-muted"
-                  onClick={() => requestPageChange("pricing")}
-                >
-                  Go to Pricing
-                </button>
-              </div>
-              <div className="status" style={{ padding: "0.75rem", background: "rgba(255,255,255,0.04)" }}>
-                Finalize view will appear here once the draft is ready for manual edits.
-              </div>
-            </div>
-          </section>
         )}
 
         {activePage === "file-review" && activeProject && activeFile && (
@@ -1863,12 +1865,24 @@ export default function App() {
                 </button>
               </div>
               <div className="modal__body">
+                <label className="panel__checkbox" style={{ marginBottom: "1rem" }}>
+                  <input
+                    type="checkbox"
+                    checked={isLumpSumProject}
+                    onChange={(event) => handleLumpSumChange(event.target.checked)}
+                  />
+                  <span>Lump Sum project (BOQ only)</span>
+                </label>
                 <div className="uploaders-grid uploaders-grid--horizontal">
-                  <label className="dropzone dropzone--estimate uploader-card">
+                  <label
+                    className={`dropzone dropzone--estimate uploader-card${isLumpSumProject ? " is-disabled" : ""}`}
+                    aria-disabled={isLumpSumProject}
+                  >
                     <input
                       type="file"
                       multiple
                       accept=".pdf,.png,.jpg,.jpeg,.webp"
+                      disabled={isLumpSumProject}
                       onChange={(event) => setAddDrawings(Array.from(event.target.files ?? []))}
                     />
                     <div className="dropzone__content">
@@ -1882,11 +1896,15 @@ export default function App() {
                       <p className="dropzone__hint">PDF or image files.</p>
                     </div>
                   </label>
-                  <label className="dropzone dropzone--estimate uploader-card">
+                  <label
+                    className={`dropzone dropzone--estimate uploader-card${isLumpSumProject ? " is-disabled" : ""}`}
+                    aria-disabled={isLumpSumProject}
+                  >
                     <input
                       type="file"
                       multiple
                       accept=".pdf,.xlsx,.xls,.csv,.docx,.txt"
+                      disabled={isLumpSumProject}
                       onChange={(event) => setAddSchedules(Array.from(event.target.files ?? []))}
                     />
                     <div className="dropzone__content">
