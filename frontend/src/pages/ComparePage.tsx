@@ -137,7 +137,7 @@ export default function ComparePage({
     pushLog("Preparing BOQ items from schedule codes.");
     pushLog("Preparing drawing detail list from extracted drawings.");
     try {
-      pushLog("Calling OpenAI to compare BOQ vs drawing details.");
+      pushLog("Calling AI to compare BOQ vs drawing details.");
       const response = await compareProjectItems(projectId, { force: Boolean(forceRefresh) });
       setResults(response.results ?? []);
       setStats(response.stats ?? null);

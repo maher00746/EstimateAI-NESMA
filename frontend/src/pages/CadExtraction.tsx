@@ -416,7 +416,7 @@ const CadExtraction: FC<CadExtractionProps> = ({
           </div>
           {error && <p className="feedback">{error}</p>}
         </div>
-          {loading && (
+        {loading && (
           <div className="processing-overlay">
             <div className="processing-indicator">
               <div className="processing-indicator__spinner">
@@ -425,7 +425,7 @@ const CadExtraction: FC<CadExtractionProps> = ({
                 </svg>
               </div>
               <div className="processing-indicator__text">
-                <p className="processing-indicator__message">Extracting items with Gemini…</p>
+                <p className="processing-indicator__message">Extracting items with AI…</p>
               </div>
             </div>
           </div>
@@ -445,7 +445,7 @@ const CadExtraction: FC<CadExtractionProps> = ({
               </svg>
             </div>
             <div className="processing-indicator__text">
-              <p className="processing-indicator__message">Extracting items with Gemini…</p>
+              <p className="processing-indicator__message">Extracting items with AI…</p>
             </div>
           </div>
         </div>

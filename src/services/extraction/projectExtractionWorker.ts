@@ -314,7 +314,7 @@ async function processJob(jobId: string): Promise<void> {
               userId: String(job.userId),
               projectId: String(job.projectId),
               fileId: String(job.fileId),
-              message: `OpenAI response received for BOQ sheet ${sheetName}${chunkLabel} (${itemCount ?? 0} items).`,
+              message: `AI response received for BOQ sheet ${sheetName}${chunkLabel} (${itemCount ?? 0} items).`,
             });
             return;
           }
@@ -329,7 +329,7 @@ async function processJob(jobId: string): Promise<void> {
             projectId: String(job.projectId),
             fileId: String(job.fileId),
             level: "error",
-            message: `OpenAI failed for BOQ sheet ${sheetName}${chunkLabel}${errorMessage ? `: ${errorMessage}` : ""}.`,
+            message: `AI failed for BOQ sheet ${sheetName}${chunkLabel}${errorMessage ? `: ${errorMessage}` : ""}.`,
           });
         },
         onSheetResult: async ({ sheetName, items: sheetItems, chunkCount }) => {
@@ -409,7 +409,7 @@ async function processJob(jobId: string): Promise<void> {
         userId: String(job.userId),
         projectId: String(job.projectId),
         fileId: String(job.fileId),
-        message: `Calling OpenAI for schedule extraction on ${file.originalName}.`,
+        message: `Calling AI for schedule extraction on ${file.originalName}.`,
       });
       const result = await extractScheduleItemsWithGemini({
         filePath: resolveStoredFilePath(file),
@@ -419,7 +419,7 @@ async function processJob(jobId: string): Promise<void> {
         userId: String(job.userId),
         projectId: String(job.projectId),
         fileId: String(job.fileId),
-        message: `OpenAI response received for schedule file ${file.originalName} (${result.items.length} items).`,
+        message: `AI response received for schedule file ${file.originalName} (${result.items.length} items).`,
       });
 
       await ProjectItemModel.deleteMany({
@@ -457,7 +457,7 @@ async function processJob(jobId: string): Promise<void> {
         userId: String(job.userId),
         projectId: String(job.projectId),
         fileId: String(job.fileId),
-        message: `Sending ${codesToSend.length} schedule code(s) to Gemini for drawing extraction.`,
+        message: `Sending ${codesToSend.length} schedule code(s) to AI for drawing extraction.`,
       });
       if (filteredCodes.length > maxCodes) {
         await createProjectLog({
