@@ -170,7 +170,7 @@ Instructions:
 2. If an item is mentioned without useful BOQ details, omit it entirely.
 3. Capture details that are required to build the BOQ for the item (materials, layers, thicknesses, steps, dimensions, specifications, quantities, or installation notes).
 4. Some details may not include the item code in the text. If the detail clearly belongs to a specific item (by proximity, leader lines, layering, callouts, or section context) in general the related details positions are closed to the item, on the same level vertically, or required to impliment the item later, assign it to that item.
-5. Do NOT repeat the same detail for the same item. If a detail is duplicated, return it only once.
+5. Do NOT repeat the same detail (for the same item or for different item), Each detail should belong to ONE item ONLY. If a detail is duplicated, return it only once.
 6. Return a JSON array of objects. Each object must include:
    - item_name: the schedule item CODE (exactly as listed, or the closest match).
    - details: the extracted BOQ-relevant detail text.
