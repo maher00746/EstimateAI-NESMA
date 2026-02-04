@@ -199,7 +199,9 @@ export interface CadExtractionItem {
   item_code: string;
   description: string;
   notes: string;
-  box: CadExtractionBox;
+  box?: CadExtractionBox | null;
+  thickness?: number | null;
+  productivityRateId?: string | null;
 }
 
 export type ProjectStatus = "in_progress" | "analyzing" | "finalized";
@@ -260,6 +262,7 @@ export interface PricingPayload {
 
 export type ProjectFileStatus = "pending" | "processing" | "ready" | "failed";
 export type ProjectFileType = "drawing" | "boq" | "schedule";
+export type ExtractionStage = "uploading" | "uploaded" | "extracting" | "done" | null;
 
 export interface ProjectFile {
   id: string;
@@ -269,6 +272,10 @@ export interface ProjectFile {
   storedName: string;
   fileType: ProjectFileType;
   status: ProjectFileStatus;
+  /** Claude file ID for drawing files */
+  claudeFileId?: string | null;
+  /** Current extraction stage for granular status tracking */
+  extractionStage?: ExtractionStage;
   boqSheetStatus?: Array<{
     sheetName: string;
     status: ProjectFileStatus;
@@ -293,6 +300,8 @@ export interface ProjectItem {
   description: string;
   notes: string;
   box?: CadExtractionBox | null;
+  thickness?: number | null;
+  productivityRateId?: string | null;
   metadata?: {
     sheetName?: string;
     sheetIndex?: number;

@@ -7,9 +7,16 @@ import { ProjectItemModel } from "../../modules/storage/projectItemModel";
 import { ProjectModel } from "../../modules/storage/projectModel";
 import { upsertProjectExtractJob } from "../../modules/storage/projectExtractionJobRepository";
 import { createProjectLog } from "../../modules/storage/projectLogRepository";
-import { extractCadBoqItemsWithGemini, extractDrawingDetailsWithGemini } from "../gemini/cadExtraction";
+import {
+  extractDrawingDetailsWithClaude,
+  deleteFileFromClaude,
+  type CadExtractionItem
+} from "../claude/cadExtraction";
+import {
+  extractScheduleItemsWithClaude,
+  deleteScheduleFileFromClaude,
+} from "../claude/scheduleExtraction";
 import { extractBoqItemsFromExcel } from "../boq/boqExcelExtraction";
-import { extractScheduleItemsWithGemini } from "../openai/scheduleExtraction";
 
 const POLL_INTERVAL_MS = 2000;
 const MAX_CONCURRENCY = 12;
@@ -405,47 +412,122 @@ async function processJob(jobId: string): Promise<void> {
         }
       ).exec();
     } else if (file.fileType === "schedule") {
-      await createProjectLog({
-        userId: String(job.userId),
-        projectId: String(job.projectId),
-        fileId: String(job.fileId),
-        message: `Calling AI for schedule extraction on ${file.originalName}.`,
-      });
-      const result = await extractScheduleItemsWithGemini({
-        filePath: resolveStoredFilePath(file),
-        fileName: file.originalName,
-      });
-      await createProjectLog({
-        userId: String(job.userId),
-        projectId: String(job.projectId),
-        fileId: String(job.fileId),
-        message: `AI response received for schedule file ${file.originalName} (${result.items.length} items).`,
-      });
+      // Schedule extraction using Claude Files API
+      let claudeScheduleFileId: string | null = null;
 
-      await ProjectItemModel.deleteMany({
-        projectId: job.projectId,
-        fileId: job.fileId,
-        source: "schedule",
-      }).exec();
+      try {
+        const result = await extractScheduleItemsWithClaude({
+          filePath: resolveStoredFilePath(file),
+          fileName: file.originalName,
+          onProgress: async (stage) => {
+            if (stage === "uploading") {
+              await ProjectExtractJobModel.updateOne(
+                { _id: job._id },
+                { stage: "uploading", message: "Uploading schedule file to Claude..." }
+              ).exec();
+              await ProjectFileModel.updateOne(
+                { _id: file._id },
+                { extractionStage: "uploading" }
+              ).exec();
+              await createProjectLog({
+                userId: String(job.userId),
+                projectId: String(job.projectId),
+                fileId: String(job.fileId),
+                message: `Uploading schedule file ${file.originalName} to Claude...`,
+              });
+            } else if (stage === "uploaded") {
+              await ProjectFileModel.updateOne(
+                { _id: file._id },
+                { extractionStage: "uploaded" }
+              ).exec();
+              await createProjectLog({
+                userId: String(job.userId),
+                projectId: String(job.projectId),
+                fileId: String(job.fileId),
+                message: `Schedule file uploaded successfully.`,
+              });
+            } else if (stage === "extracting") {
+              await ProjectExtractJobModel.updateOne(
+                { _id: job._id },
+                { stage: "extracting", message: "Extracting schedule items with Claude..." }
+              ).exec();
+              await ProjectFileModel.updateOne(
+                { _id: file._id },
+                { extractionStage: "extracting" }
+              ).exec();
+              await createProjectLog({
+                userId: String(job.userId),
+                projectId: String(job.projectId),
+                fileId: String(job.fileId),
+                message: `Sending extraction prompt to Claude for ${file.originalName}...`,
+              });
+            } else if (stage === "done") {
+              await ProjectFileModel.updateOne(
+                { _id: file._id },
+                { extractionStage: "done" }
+              ).exec();
+            }
+          },
+        });
 
-      items = (result.items || []).map((item) => {
-        const fields = { ...(item.fields ?? {}) };
-        if (!fields.item_code) fields.item_code = item.item_code || "";
-        if (!fields.description) fields.description = item.description || "";
-        if (!fields.notes) fields.notes = item.notes || "";
-        return {
-          userId: job.userId,
+        // Store the Claude file ID for cleanup and reference
+        claudeScheduleFileId = result.fileId;
+        await ProjectFileModel.updateOne(
+          { _id: file._id },
+          { claudeFileId: result.fileId }
+        ).exec();
+
+        await createProjectLog({
+          userId: String(job.userId),
+          projectId: String(job.projectId),
+          fileId: String(job.fileId),
+          message: `Schedule extraction complete for ${file.originalName}. Received ${result.items.length} items.`,
+        });
+
+        // Delete existing items before inserting new ones
+        await ProjectItemModel.deleteMany({
           projectId: job.projectId,
           fileId: job.fileId,
-          source: "schedule" as const,
-          item_code: item.item_code || "ITEM",
-          description: item.description || "N/A",
-          notes: item.notes || "N/A",
-          box: null,
-          metadata: { fields },
-        };
-      });
+          source: "schedule",
+        }).exec();
+
+        items = (result.items || []).map((item) => {
+          const fields = { ...(item.fields ?? {}) };
+          if (!fields.item_code) fields.item_code = item.item_code || "";
+          if (!fields.description) fields.description = item.description || "";
+          if (!fields.notes) fields.notes = item.notes || "";
+          return {
+            userId: job.userId,
+            projectId: job.projectId,
+            fileId: job.fileId,
+            source: "schedule" as const,
+            item_code: item.item_code || "ITEM",
+            description: item.description || "N/A",
+            notes: item.notes || "N/A",
+            box: null,
+            metadata: { fields },
+          };
+        });
+
+        // Clean up: delete file from Claude after successful extraction
+        if (claudeScheduleFileId) {
+          await createProjectLog({
+            userId: String(job.userId),
+            projectId: String(job.projectId),
+            fileId: String(job.fileId),
+            message: `Cleaning up uploaded schedule file from Claude...`,
+          });
+          await deleteScheduleFileFromClaude(claudeScheduleFileId);
+        }
+      } catch (extractionError) {
+        // Clean up Claude file on error if it was uploaded
+        if (claudeScheduleFileId) {
+          await deleteScheduleFileFromClaude(claudeScheduleFileId);
+        }
+        throw extractionError;
+      }
     } else {
+      // Drawing extraction using Claude Files API
       const scheduleItems = await loadScheduleItemTokens(String(job.projectId));
       const filteredCodes = scheduleItems.filter((code) => code.length > 0 && code.length <= 80);
       const maxCodes = 300;
@@ -453,12 +535,8 @@ async function processJob(jobId: string): Promise<void> {
       if (codesToSend.length === 0) {
         throw new Error("Schedule extraction is required before drawing extraction.");
       }
-      await createProjectLog({
-        userId: String(job.userId),
-        projectId: String(job.projectId),
-        fileId: String(job.fileId),
-        message: `Sending ${codesToSend.length} schedule code(s) to AI for drawing extraction.`,
-      });
+
+      // Log truncation warning if applicable
       if (filteredCodes.length > maxCodes) {
         await createProjectLog({
           userId: String(job.userId),
@@ -468,34 +546,118 @@ async function processJob(jobId: string): Promise<void> {
           message: `Schedule code list truncated from ${filteredCodes.length} to ${maxCodes} items to keep the prompt within limits.`,
         });
       }
-      const result = await extractDrawingDetailsWithGemini({
-        filePath: resolveStoredFilePath(file),
-        fileName: file.originalName,
-        scheduleItems: codesToSend,
-      });
-      await createProjectLog({
-        userId: String(job.userId),
-        projectId: String(job.projectId),
-        fileId: String(job.fileId),
-        message: `Data received for ${file.originalName}.`,
-      });
 
-      await ProjectItemModel.deleteMany({
-        projectId: job.projectId,
-        fileId: job.fileId,
-        source: "cad",
-      }).exec();
+      // Track Claude file ID for cleanup
+      let claudeFileId: string | null = null;
 
-      items = (result.items || []).map((item) => ({
-        userId: job.userId,
-        projectId: job.projectId,
-        fileId: job.fileId,
-        source: "cad" as const,
-        item_code: item.item_code || "NOTE",
-        description: item.description || "N/A",
-        notes: item.notes || "N/A",
-        box: item.box ?? null,
-      }));
+      try {
+        // Use Claude Files API with granular progress tracking
+        const result = await extractDrawingDetailsWithClaude({
+          filePath: resolveStoredFilePath(file),
+          fileName: file.originalName,
+          scheduleItems: codesToSend,
+          onProgress: async (stage) => {
+            if (stage === "uploading") {
+              // Update job stage and file status
+              await ProjectExtractJobModel.updateOne(
+                { _id: job._id },
+                { stage: "uploading", message: "Uploading file to Claude..." }
+              ).exec();
+              await ProjectFileModel.updateOne(
+                { _id: file._id },
+                { extractionStage: "uploading" }
+              ).exec();
+              await createProjectLog({
+                userId: String(job.userId),
+                projectId: String(job.projectId),
+                fileId: String(job.fileId),
+                message: `Uploading ${file.originalName} to Claude...`,
+              });
+            } else if (stage === "uploaded") {
+              await ProjectFileModel.updateOne(
+                { _id: file._id },
+                { extractionStage: "uploaded" }
+              ).exec();
+              await createProjectLog({
+                userId: String(job.userId),
+                projectId: String(job.projectId),
+                fileId: String(job.fileId),
+                message: `File uploaded successfully. Preparing extraction with ${codesToSend.length} schedule code(s).`,
+              });
+            } else if (stage === "extracting") {
+              await ProjectExtractJobModel.updateOne(
+                { _id: job._id },
+                { stage: "extracting", message: "Extracting items with Claude..." }
+              ).exec();
+              await ProjectFileModel.updateOne(
+                { _id: file._id },
+                { extractionStage: "extracting" }
+              ).exec();
+              await createProjectLog({
+                userId: String(job.userId),
+                projectId: String(job.projectId),
+                fileId: String(job.fileId),
+                message: `Sending extraction prompt to Claude for ${file.originalName}...`,
+              });
+            } else if (stage === "done") {
+              await ProjectFileModel.updateOne(
+                { _id: file._id },
+                { extractionStage: "done" }
+              ).exec();
+            }
+          },
+        });
+
+        // Store the Claude file ID for cleanup and reference
+        claudeFileId = result.fileId;
+        await ProjectFileModel.updateOne(
+          { _id: file._id },
+          { claudeFileId: result.fileId }
+        ).exec();
+
+        await createProjectLog({
+          userId: String(job.userId),
+          projectId: String(job.projectId),
+          fileId: String(job.fileId),
+          message: `Extraction complete for ${file.originalName}. Received ${result.items.length} items.`,
+        });
+
+        // Delete existing items before inserting new ones
+        await ProjectItemModel.deleteMany({
+          projectId: job.projectId,
+          fileId: job.fileId,
+          source: "cad",
+        }).exec();
+
+        items = (result.items || []).map((item: CadExtractionItem) => ({
+          userId: job.userId,
+          projectId: job.projectId,
+          fileId: job.fileId,
+          source: "cad" as const,
+          item_code: item.item_code || "NOTE",
+          description: item.description || "N/A",
+          notes: item.notes || "N/A",
+          box: item.box ?? null,
+          thickness: typeof item.thickness === "number" ? item.thickness : null,
+        }));
+
+        // Clean up: delete file from Claude after successful extraction
+        if (claudeFileId) {
+          await createProjectLog({
+            userId: String(job.userId),
+            projectId: String(job.projectId),
+            fileId: String(job.fileId),
+            message: `Cleaning up uploaded file from Claude...`,
+          });
+          await deleteFileFromClaude(claudeFileId);
+        }
+      } catch (extractionError) {
+        // Clean up Claude file on error if it was uploaded
+        if (claudeFileId) {
+          await deleteFileFromClaude(claudeFileId);
+        }
+        throw extractionError;
+      }
     }
 
     if (items.length > 0 && !(file.fileType === "boq" && boqInsertedDuringExtraction)) {
@@ -503,7 +665,10 @@ async function processJob(jobId: string): Promise<void> {
     }
 
     if (file.fileType !== "boq") {
-      await ProjectFileModel.updateOne({ _id: file._id }, { status: "ready" }).exec();
+      await ProjectFileModel.updateOne(
+        { _id: file._id },
+        { status: "ready", extractionStage: "done" }
+      ).exec();
     }
     if (file.fileType === "schedule") {
       await queuePendingDrawingsAfterScheduleReady({
@@ -522,7 +687,10 @@ async function processJob(jobId: string): Promise<void> {
       }
     ).exec();
   } catch (error) {
-    await ProjectFileModel.updateOne({ _id: file._id }, { status: "failed" }).exec();
+    await ProjectFileModel.updateOne(
+      { _id: file._id },
+      { status: "failed", extractionStage: null }
+    ).exec();
     await createProjectLog({
       userId: String(job.userId),
       projectId: String(job.projectId),

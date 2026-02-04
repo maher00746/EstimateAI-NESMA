@@ -506,6 +506,17 @@ export default function Pricing({
     return map;
   }, [drawingItems]);
 
+  const findScheduleMatches = useCallback(
+    (description: string) => {
+      const descriptionLower = description.toLowerCase();
+      const matches = scheduleCodeEntries
+        .filter((entry) => descriptionLower && descriptionLower.includes(entry.lower))
+        .map((entry) => entry.original);
+      return Array.from(new Set(matches));
+    },
+    [scheduleCodeEntries]
+  );
+
   const isRateOnlyItem = useCallback((item: ProjectItem): boolean => {
     const rateValue = getBoqFieldValue(item, "rate");
     return rateValue.trim().toLowerCase() === "rate only";
@@ -650,17 +661,6 @@ export default function Pricing({
     ]);
   }, []);
 
-  const findScheduleCodes = useCallback(
-    (description: string) => {
-      const lower = description.toLowerCase();
-      if (!lower.trim()) return [];
-      return scheduleCodeEntries
-        .filter((entry) => lower.includes(entry.lower))
-        .map((entry) => entry.original);
-    },
-    [scheduleCodeEntries]
-  );
-
   const handleAutoSuggest = useCallback(async () => {
     if (suggestionStatus === "running") return;
     setShowSuggestionLogs(true);
@@ -670,39 +670,126 @@ export default function Pricing({
     setSuggestionCallsCompleted(0);
     setSuggestionCallsTotal(0);
 
-    if (productivitySuggestionItems.length === 0) {
-      pushSuggestionLog("No productivity items available to suggest from.", "warning");
-      setSuggestionStatus("failed");
-      return;
-    }
     if (pricingBlocks.length === 0) {
       pushSuggestionLog("No priced items available for suggestions.", "warning");
       setSuggestionStatus("failed");
       return;
     }
 
-    const suggestionBlocks = pricingBlocks.map((entry) => {
+    const scheduleBlocks = pricingBlocks.filter((entry) => {
+      const description = String(entry.item.description ?? "");
+      return findScheduleMatches(description).length > 0;
+    });
+    const aiBlocks = pricingBlocks.filter((entry) => {
+      const description = String(entry.item.description ?? "");
+      return findScheduleMatches(description).length === 0;
+    });
+
+    let scheduleAddedCount = 0;
+    let scheduleBlockCount = 0;
+    let scheduleDetailCount = 0;
+    let scheduleEligibleDetailCount = 0;
+    if (scheduleBlocks.length > 0) {
+      setSubItemsByItemId((current) => {
+        const next = { ...current };
+        scheduleBlocks.forEach((entry) => {
+          const itemId = entry.item.id;
+          const description = String(entry.item.description ?? "");
+          const matchedCodes = findScheduleMatches(description);
+          if (matchedCodes.length === 0) return;
+          const baseQty = getBoqFieldValue(entry.item, "qty");
+          const qty = String(qtyOverrideByItemId[entry.item.id] ?? baseQty ?? "").trim() || "1";
+          const baseQtyValue = parseStrictNumber(qty);
+          const details = matchedCodes.flatMap((code) => drawingItemsByCode.get(code.toLowerCase()) ?? []);
+          if (details.length === 0) return;
+          scheduleDetailCount += details.length;
+          scheduleBlockCount += 1;
+          const existing = next[itemId] ?? [];
+          const existingIds = new Set(existing.map((row) => row.productivityId).filter(Boolean));
+          const newRows = details
+            .map((detail) => {
+              const detailProductivityId = detail.productivityRateId ?? undefined;
+              if (!detailProductivityId) return null;
+              if (existingIds.has(detailProductivityId)) return null;
+              const option = productivityOptionsById.get(detailProductivityId);
+              if (!option) return null;
+              scheduleEligibleDetailCount += 1;
+              const detailDescription = String(detail.description ?? "").trim();
+              const thickValue = parseThickness(detail.thickness);
+              const computedQty =
+                thickValue !== null && baseQtyValue !== null
+                  ? String(baseQtyValue * thickValue * 0.001)
+                  : qty;
+              return {
+                id: uuidv4(),
+                description: detailDescription || option.description,
+                productivityId: option.id,
+                suggestedIds: [option.id],
+                qty: computedQty,
+                unitMh: option.unitMh,
+                unitWagesRate: option.unitWagesRate,
+                unitEquipRate: option.equipmentRate,
+                materialsRate: "0.00",
+                subconRate: "0.00",
+                toolsRate: "0.00",
+              } as PricingSubItem;
+            })
+            .filter(Boolean) as PricingSubItem[];
+          if (newRows.length > 0) {
+            next[itemId] = [...existing, ...newRows];
+            scheduleAddedCount += newRows.length;
+          }
+        });
+        return next;
+      });
+      if (scheduleBlockCount > 0) {
+        if (scheduleAddedCount > 0) {
+          pushSuggestionLog(
+            `Schedule-based details: added ${scheduleAddedCount} sub-item(s) across ${scheduleBlockCount} block(s).`
+          );
+        } else {
+          pushSuggestionLog(
+            `Schedule-based details processed for ${scheduleBlockCount} block(s), no eligible sub-items added.`
+          );
+        }
+      }
+      if (scheduleDetailCount > 0 && scheduleEligibleDetailCount === 0) {
+        pushSuggestionLog(
+          "No drawing details with productivity rate IDs were found for schedule-coded blocks.",
+          "warning"
+        );
+      }
+      if (scheduleAddedCount > 0) {
+        onDirtyChange?.(true);
+        setIsDirty(true);
+      }
+    }
+
+    if (aiBlocks.length === 0) {
+      setSuggestionStatus("success");
+      return;
+    }
+
+    if (productivitySuggestionItems.length === 0) {
+      pushSuggestionLog("No productivity items available to suggest from.", "warning");
+      setSuggestionStatus("failed");
+      return;
+    }
+
+    const suggestionBlocks = aiBlocks.map((entry) => {
       const description = entry.item.description ?? "";
       const baseQty = getBoqFieldValue(entry.item, "qty");
       const qty = String(qtyOverrideByItemId[entry.item.id] ?? baseQty ?? "").trim();
-      const scheduleCodes = findScheduleCodes(description);
-      const drawingDetails: string[] = [];
-      if (scheduleCodes.length > 0) {
-        scheduleCodes.forEach((code) => {
-          const matches = drawingItemsByCode.get(code.toLowerCase()) ?? [];
-          matches.forEach((item) => {
-            if (item.description) drawingDetails.push(item.description);
-            if (item.notes) drawingDetails.push(item.notes);
-          });
-        });
-      }
+      const drawingDetails = entry.notes
+        .map((note) => String(note.description ?? "").trim())
+        .filter(Boolean);
       return {
         blockId: entry.item.id,
         itemCode: String(entry.item.item_code ?? "").trim(),
         description,
         qty,
         drawingDetails,
-        scheduleCodes,
+        scheduleCodes: [],
       };
     });
     const defaultQtyByBlockId = new Map(
@@ -794,6 +881,8 @@ export default function Pricing({
             pushSuggestionLog(
               `AI response ${index + 1}/${chunks.length} received. Suggested ${suggestedCount} item(s), added ${addedCount} new sub-item(s).`
             );
+            onDirtyChange?.(true);
+            setIsDirty(true);
           } else {
             pushSuggestionLog(
               suggestedCount > 0
@@ -832,8 +921,10 @@ export default function Pricing({
     pricingBlocks,
     productivitySuggestionItems,
     productivityOptionsById,
+    qtyOverrideByItemId,
     drawingItemsByCode,
-    findScheduleCodes,
+    findScheduleMatches,
+    onDirtyChange,
     pushSuggestionLog,
   ]);
 

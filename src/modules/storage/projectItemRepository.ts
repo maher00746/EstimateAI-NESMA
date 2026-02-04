@@ -30,6 +30,8 @@ export async function createProjectItem(params: {
   description: string;
   notes: string;
   box?: { left: number; top: number; right: number; bottom: number } | null;
+  thickness?: number | null;
+  productivityRateId?: string | null;
   metadata?: {
     sheetName?: string;
     sheetIndex?: number;
@@ -57,6 +59,8 @@ export async function createProjectItem(params: {
     description: params.description,
     notes: params.notes,
     box: params.box ?? null,
+    thickness: params.thickness ?? null,
+    productivityRateId: params.productivityRateId ?? null,
     metadata: params.metadata ?? null,
   });
   return doc.save();
@@ -71,6 +75,8 @@ export async function updateProjectItem(params: {
     description: string;
     notes: string;
     box: { left: number; top: number; right: number; bottom: number } | null;
+    thickness: number | null;
+    productivityRateId: string | null;
   }>;
 }): Promise<ProjectItemDocument | null> {
   if (

@@ -2,7 +2,12 @@ import mongoose, { Schema } from "mongoose";
 
 export type ProjectExtractJobStatus = "queued" | "processing" | "done" | "failed";
 
-export type ProjectExtractJobStage = "queued" | "processing" | "gemini" | "finalizing";
+export type ProjectExtractJobStage =
+  | "queued"
+  | "uploading"      // Uploading file to Claude Files API
+  | "processing"     // File uploaded, processing
+  | "extracting"     // Sending extraction prompt to Claude
+  | "finalizing";
 
 export interface ProjectExtractJobDocument extends mongoose.Document {
   userId: mongoose.Types.ObjectId;

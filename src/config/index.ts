@@ -30,9 +30,24 @@ export const config = {
   // Higher thinking budget for complex visual analysis of architectural drawings
   geminiThinkingBudget:
     Number.isFinite(Number(process.env.GEMINI_THINKING_BUDGET)) &&
-    Number(process.env.GEMINI_THINKING_BUDGET) > 0
+      Number(process.env.GEMINI_THINKING_BUDGET) > 0
       ? Number(process.env.GEMINI_THINKING_BUDGET)
       : 16384,
+
+  // Claude (CAD/Drawing extraction via Files API)
+  anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? "",
+  claudeModel: (process.env.CLAUDE_MODEL && process.env.CLAUDE_MODEL.trim())
+    ? process.env.CLAUDE_MODEL.trim()
+    : "claude-sonnet-4-5",
+  claudeMaxTokens: Number.isFinite(Number(process.env.CLAUDE_MAX_TOKENS))
+    ? Number(process.env.CLAUDE_MAX_TOKENS)
+    : 64000, // Max allowed for claude-sonnet-4-5
+  // Claude thinking budget for careful CAD reasoning
+  claudeThinkingBudget:
+    Number.isFinite(Number(process.env.CLAUDE_THINKING_BUDGET)) &&
+      Number(process.env.CLAUDE_THINKING_BUDGET) > 0
+      ? Number(process.env.CLAUDE_THINKING_BUDGET)
+      : 8192,
 
   // LandingAI ADE Parse (PDF -> Markdown) to improve Gemini transcription accuracy
   landingAiApiKey: process.env.LANDINGAI_API_KEY ?? "",

@@ -18,6 +18,8 @@ export interface ProjectItemDocument extends mongoose.Document {
   description: string;
   notes: string;
   box?: CadBox | null;
+  thickness?: number | null;
+  productivityRateId?: string | null;
   metadata?: {
     sheetName?: string;
     sheetIndex?: number;
@@ -52,6 +54,8 @@ const ProjectItemSchema = new Schema<ProjectItemDocument>(
     description: { type: String, required: true },
     notes: { type: String, required: true },
     box: { type: CadBoxSchema, default: null },
+    thickness: { type: Number, default: null },
+    productivityRateId: { type: String, default: null },
     metadata: { type: Schema.Types.Mixed, default: null },
   },
   { timestamps: true }

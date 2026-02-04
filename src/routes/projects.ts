@@ -294,6 +294,8 @@ router.post(
           storedName: file.storedName,
           fileType: file.fileType,
           status: file.status,
+          claudeFileId: (file as any).claudeFileId ?? null,
+          extractionStage: (file as any).extractionStage ?? null,
           boqSheetStatus: file.boqSheetStatus ?? null,
           createdAt: file.createdAt,
           updatedAt: file.updatedAt,
@@ -501,6 +503,8 @@ router.get("/:projectId/files", async (req: AuthRequest, res: Response, next: Ne
         storedName: file.storedName,
         fileType: file.fileType,
         status: file.status,
+        claudeFileId: (file as any).claudeFileId ?? null,
+        extractionStage: (file as any).extractionStage ?? null,
         boqSheetStatus: file.boqSheetStatus ?? null,
         createdAt: file.createdAt,
         updatedAt: file.updatedAt,
@@ -739,6 +743,8 @@ router.get(
             storedName: file.storedName,
             fileType: file.fileType,
             status: file.status,
+            claudeFileId: (file as any).claudeFileId ?? null,
+            extractionStage: (file as any).extractionStage ?? null,
             boqSheetStatus: file.boqSheetStatus ?? null,
             createdAt: file.createdAt,
             updatedAt: file.updatedAt,
@@ -755,6 +761,8 @@ router.get(
               description: item.description,
               notes: item.notes,
               box: item.box ?? null,
+              thickness: item.thickness ?? null,
+              productivityRateId: item.productivityRateId ?? null,
               metadata: item.metadata ?? null,
               createdAt: item.createdAt,
               updatedAt: item.updatedAt,
@@ -774,7 +782,12 @@ router.get(
           }),
         };
         const fingerprint = JSON.stringify({
-          files: payload.files.map((file) => ({ id: file.id, status: file.status, updatedAt: file.updatedAt })),
+          files: payload.files.map((file) => ({
+            id: file.id,
+            status: file.status,
+            extractionStage: file.extractionStage,
+            updatedAt: file.updatedAt
+          })),
           items: payload.items.map((item) => item.id),
           logs: payload.logs.map((log) => log.id),
         });
@@ -842,6 +855,8 @@ router.get("/:projectId/items", async (req: AuthRequest, res: Response, next: Ne
           description: item.description,
           notes: item.notes,
           box: item.box ?? null,
+          thickness: item.thickness ?? null,
+          productivityRateId: item.productivityRateId ?? null,
           metadata: item.metadata ?? null,
           createdAt: item.createdAt,
           updatedAt: item.updatedAt,
@@ -873,6 +888,8 @@ router.get(
           description: item.description,
           notes: item.notes,
           box: item.box ?? null,
+          thickness: item.thickness ?? null,
+          productivityRateId: item.productivityRateId ?? null,
           metadata: item.metadata ?? null,
           createdAt: item.createdAt,
           updatedAt: item.updatedAt,
@@ -894,7 +911,7 @@ router.post(
       if (!file) {
         return res.status(404).json({ message: "File not found" });
       }
-      const { item_code, description, notes, box } = req.body ?? {};
+      const { item_code, description, notes, box, thickness, productivityRateId } = req.body ?? {};
       if (!item_code || !description || !notes) {
         return res.status(400).json({ message: "item_code, description, and notes are required" });
       }
@@ -907,6 +924,8 @@ router.post(
         description,
         notes,
         box: box ?? null,
+        thickness: typeof thickness === "number" ? thickness : null,
+        productivityRateId: productivityRateId ?? null,
       });
       res.status(200).json({
         id: item._id,
@@ -916,6 +935,8 @@ router.post(
         description: item.description,
         notes: item.notes,
         box: item.box ?? null,
+        thickness: item.thickness ?? null,
+        productivityRateId: item.productivityRateId ?? null,
         createdAt: item.createdAt,
         updatedAt: item.updatedAt,
       });
@@ -931,7 +952,7 @@ router.patch(
     try {
       const userId = getUserId(req);
       const { projectId, itemId } = req.params;
-      const { item_code, description, notes, box } = req.body ?? {};
+      const { item_code, description, notes, box, thickness, productivityRateId } = req.body ?? {};
       const updated = await updateProjectItem({
         userId,
         projectId,
@@ -941,6 +962,8 @@ router.patch(
           ...(description ? { description } : {}),
           ...(notes ? { notes } : {}),
           ...(box ? { box } : {}),
+          ...(thickness !== undefined ? { thickness: typeof thickness === "number" ? thickness : null } : {}),
+          ...(productivityRateId !== undefined ? { productivityRateId: productivityRateId || null } : {}),
         },
       });
       if (!updated) {
@@ -954,6 +977,8 @@ router.patch(
         description: updated.description,
         notes: updated.notes,
         box: updated.box ?? null,
+        thickness: updated.thickness ?? null,
+        productivityRateId: updated.productivityRateId ?? null,
         createdAt: updated.createdAt,
         updatedAt: updated.updatedAt,
       });

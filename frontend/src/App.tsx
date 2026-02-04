@@ -40,7 +40,7 @@ type AppPage =
   | "pricing";
 
 type CadItemWithId = CadExtractionItem & { id: string };
-type EditableProjectItem = Pick<ProjectItem, "id" | "item_code" | "description" | "notes" | "box" | "metadata">;
+type EditableProjectItem = Pick<ProjectItem, "id" | "item_code" | "description" | "notes" | "box" | "metadata" | "thickness" | "productivityRateId">;
 
 const PROJECT_STATUS_LABELS: Record<ProjectSummary["status"], string> = {
   in_progress: "In Progess",
@@ -53,6 +53,13 @@ const FILE_STATUS_LABELS: Record<ProjectFile["status"], string> = {
   processing: "Processing",
   ready: "Ready",
   failed: "Failed",
+};
+
+const EXTRACTION_STAGE_LABELS: Record<string, string> = {
+  uploading: "Uploading to AI...",
+  uploaded: "File uploaded",
+  extracting: "Extracting items...",
+  done: "Complete",
 };
 
 const renderCell = (value: string | number | null | undefined) => {
@@ -543,12 +550,16 @@ export default function App() {
             JSON.stringify(existing.box ?? null) !== JSON.stringify(item.box ?? null);
           const metadataChanged =
             JSON.stringify(existing.metadata ?? null) !== JSON.stringify(item.metadata ?? null);
+          const thicknessChanged = (existing.thickness ?? null) !== (item.thickness ?? null);
+          const productivityRateIdChanged = (existing.productivityRateId ?? null) !== (item.productivityRateId ?? null);
           const changed =
             existing.item_code !== item.item_code ||
             existing.description !== item.description ||
             existing.notes !== item.notes ||
             boxChanged ||
-            metadataChanged;
+            metadataChanged ||
+            thicknessChanged ||
+            productivityRateIdChanged;
           if (!changed) return Promise.resolve();
           return updateProjectItem(activeProject.id, item.id, {
             item_code: item.item_code,
@@ -556,6 +567,8 @@ export default function App() {
             notes: item.notes,
             box: item.box ?? null,
             metadata: item.metadata ?? null,
+            thickness: item.thickness ?? null,
+            productivityRateId: item.productivityRateId ?? null,
           });
         })
       );
@@ -568,6 +581,8 @@ export default function App() {
             notes: item.notes || "N/A",
             box: item.box ?? null,
             metadata: item.metadata ?? null,
+            thickness: item.thickness ?? null,
+            productivityRateId: item.productivityRateId ?? null,
           })
         )
       );
@@ -696,12 +711,27 @@ export default function App() {
     </span>
   );
 
-  const renderFileStatus = (status: ProjectFile["status"]) => (
-    <span className="status-inline">
-      {status === "processing" && <span className="status-spinner" aria-hidden="true" />}
-      {FILE_STATUS_LABELS[status]}
-    </span>
-  );
+  const renderFileStatus = (file: ProjectFile) => {
+    const { status, extractionStage, fileType } = file;
+
+    // Show extraction stage details for drawing files being processed
+    if (status === "processing" && fileType === "drawing" && extractionStage) {
+      const stageLabel = EXTRACTION_STAGE_LABELS[extractionStage] || "Processing";
+      return (
+        <span className="status-inline">
+          <span className="status-spinner" aria-hidden="true" />
+          {stageLabel}
+        </span>
+      );
+    }
+
+    return (
+      <span className="status-inline">
+        {status === "processing" && <span className="status-spinner" aria-hidden="true" />}
+        {FILE_STATUS_LABELS[status]}
+      </span>
+    );
+  };
 
 
   const cadReviewItems: CadItemWithId[] = fileItems.map((item) => ({
@@ -710,6 +740,8 @@ export default function App() {
     description: item.description,
     notes: item.notes,
     box: item.box ?? { left: 0, top: 0, right: 0, bottom: 0 },
+    thickness: item.thickness ?? null,
+    productivityRateId: item.productivityRateId ?? null,
   }));
 
   const drawingItems = useMemo(
@@ -1347,7 +1379,7 @@ export default function App() {
                                   <td>{renderCell(file.fileNo)}</td>
                                   <td className="kb-table__filename">{renderCell(file.fileName)}</td>
                                   <td>{renderCell(file.fileType)}</td>
-                                  <td>{renderFileStatus(file.status)}</td>
+                                  <td>{renderFileStatus(file)}</td>
                                   <td>
                                     <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
                                       <button type="button" className="btn-secondary" onClick={() => void handleOpenFile(file)}>

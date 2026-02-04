@@ -2,6 +2,7 @@ import mongoose, { Schema } from "mongoose";
 
 export type ProjectFileType = "drawing" | "boq" | "schedule";
 export type ProjectFileStatus = "pending" | "processing" | "ready" | "failed";
+export type ExtractionStage = "uploading" | "uploaded" | "extracting" | "done" | null;
 
 export interface ProjectFileDocument extends mongoose.Document {
   userId: mongoose.Types.ObjectId;
@@ -11,6 +12,10 @@ export interface ProjectFileDocument extends mongoose.Document {
   storedName: string;
   fileType: ProjectFileType;
   status: ProjectFileStatus;
+  /** Claude Files API file_id for drawing files */
+  claudeFileId?: string | null;
+  /** Current extraction stage for granular status tracking */
+  extractionStage?: ExtractionStage;
   boqSheetStatus?: Array<{
     sheetName: string;
     status: ProjectFileStatus;
@@ -34,6 +39,8 @@ const ProjectFileSchema = new Schema<ProjectFileDocument>(
     storedName: { type: String, required: true },
     fileType: { type: String, required: true, index: true },
     status: { type: String, required: true, index: true },
+    claudeFileId: { type: String, default: null },
+    extractionStage: { type: String, default: null },
     boqSheetStatus: { type: Schema.Types.Mixed, default: null },
   },
   { timestamps: true }

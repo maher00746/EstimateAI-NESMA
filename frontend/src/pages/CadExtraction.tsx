@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FC } from "react";
 import LandingAiReview from "../LandingAiReview";
-import { extractCadItems } from "../services/api";
-import type { CadExtractionBox, CadExtractionItem } from "../types";
+import { extractCadItems, getProductivityRates } from "../services/api";
+import type { CadExtractionBox, CadExtractionItem, ProductivityRatesBlock } from "../types";
 
 type CadItemWithId = CadExtractionItem & { id: string };
 
@@ -40,8 +40,16 @@ const serializeCadItems = (items: CadItemWithId[]): string => {
       description: item.description ?? "",
       notes: item.notes ?? "",
       box: normalizeBox(item.box) ?? null,
+      thickness: item.thickness ?? null,
+      productivityRateId: item.productivityRateId ?? null,
     }))
   );
+};
+
+type ProductivityOption = {
+  id: string;
+  description: string;
+  unit: string;
 };
 
 const CadExtraction: FC<CadExtractionProps> = ({
@@ -57,16 +65,19 @@ const CadExtraction: FC<CadExtractionProps> = ({
   const [items, setItems] = useState<CadItemWithId[]>([]);
   const [selectedItemId, setSelectedItemId] = useState<string>("");
   const [hasExtracted, setHasExtracted] = useState(false);
-  const [selectAll, setSelectAll] = useState(false);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>("");
   const [initialSnapshot, setInitialSnapshot] = useState("");
   const [showUnsavedPrompt, setShowUnsavedPrompt] = useState(false);
+  const [productivityBlocks, setProductivityBlocks] = useState<ProductivityRatesBlock[]>([]);
+  const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
+  const [prodRateSearchQuery, setProdRateSearchQuery] = useState<Record<string, string>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
   const tableRowRefs = useRef<Record<string, HTMLTableRowElement | null>>({});
   const tableScrollRef = useRef<HTMLDivElement | null>(null);
   const selectionSourceRef = useRef<"pdf" | "table" | null>(null);
+  const dropdownAnchorRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   const isReviewMode = mode === "review";
 
@@ -89,6 +100,32 @@ const CadExtraction: FC<CadExtractionProps> = ({
       if (url.startsWith("blob:")) URL.revokeObjectURL(url);
     };
   }, [selectedFile, externalFileUrl, externalItems, isReviewMode]);
+
+  // Load productivity rates when in review mode
+  useEffect(() => {
+    if (!isReviewMode) return;
+    getProductivityRates()
+      .then((payload) => {
+        setProductivityBlocks(payload.blocks ?? []);
+      })
+      .catch(() => {
+        // Silently fail - productivity rates are optional
+      });
+  }, [isReviewMode]);
+
+  const productivityOptions = useMemo<ProductivityOption[]>(
+    () =>
+      productivityBlocks.map((block) => ({
+        id: block.id,
+        description: block.description,
+        unit: block.unit,
+      })),
+    [productivityBlocks]
+  );
+
+  const productivityOptionsById = useMemo(() => {
+    return new Map(productivityOptions.map((option) => [option.id, option]));
+  }, [productivityOptions]);
   const hasUnsavedChanges = useMemo(() => {
     if (!isReviewMode) return false;
     return initialSnapshot !== serializeCadItems(items);
@@ -139,7 +176,6 @@ const CadExtraction: FC<CadExtractionProps> = ({
     setItems([]);
     setSelectedItemId("");
     setHasExtracted(false);
-    setSelectAll(false);
     setError("");
   }, []);
 
@@ -149,7 +185,6 @@ const CadExtraction: FC<CadExtractionProps> = ({
     setError("");
     setItems([]);
     setSelectedItemId("");
-    setSelectAll(false);
     try {
       const result = await extractCadItems(selectedFile);
       const enriched = (result.items || []).map((item, idx) => ({
@@ -167,12 +202,42 @@ const CadExtraction: FC<CadExtractionProps> = ({
   }, [selectedFile]);
 
   const handleItemFieldChange = useCallback(
-    (id: string, field: "item_code" | "description" | "notes", value: string) => {
+    (id: string, field: "item_code" | "description" | "notes" | "thickness" | "productivityRateId", value: string | number | null) => {
       setItems((prev) =>
         prev.map((item) => (item.id === id ? { ...item, [field]: value } : item))
       );
     },
     []
+  );
+
+  const handleThicknessChange = useCallback(
+    (id: string, value: string) => {
+      const trimmed = value.trim();
+      if (trimmed === "") {
+        handleItemFieldChange(id, "thickness", null);
+      } else {
+        const num = parseFloat(trimmed);
+        handleItemFieldChange(id, "thickness", isNaN(num) ? null : num);
+      }
+    },
+    [handleItemFieldChange]
+  );
+
+  const handleSelectProductivityRate = useCallback(
+    (itemId: string, optionId: string) => {
+      handleItemFieldChange(itemId, "productivityRateId", optionId);
+      setActiveDropdownId(null);
+      setProdRateSearchQuery((prev) => ({ ...prev, [itemId]: "" }));
+    },
+    [handleItemFieldChange]
+  );
+
+  const handleClearProductivityRate = useCallback(
+    (itemId: string) => {
+      handleItemFieldChange(itemId, "productivityRateId", null);
+      setProdRateSearchQuery((prev) => ({ ...prev, [itemId]: "" }));
+    },
+    [handleItemFieldChange]
   );
 
   const handleDeleteItem = useCallback((id: string) => {
@@ -209,6 +274,17 @@ const CadExtraction: FC<CadExtractionProps> = ({
       setSaving(false);
     }
   }, [items, onSave]);
+
+  const handleMoveItemToCode = useCallback((itemId: string, targetCode: string) => {
+    const normalizedTarget = (targetCode || "ITEM").trim() || "ITEM";
+    setItems((prev) =>
+      prev.map((item) => {
+        if (item.id !== itemId) return item;
+        if (((item.item_code || "ITEM").trim() || "ITEM") === normalizedTarget) return item;
+        return { ...item, item_code: normalizedTarget };
+      })
+    );
+  }, []);
 
   const handleBackClick = useCallback(() => {
     if (!onBack) return;
@@ -250,14 +326,6 @@ const CadExtraction: FC<CadExtractionProps> = ({
           <span style={{ color: "rgba(227,233,255,0.75)", fontSize: "0.88rem" }}>
             {items.length} item(s)
           </span>
-          <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.88rem" }}>
-            <input
-              type="checkbox"
-              checked={selectAll}
-              onChange={(event) => setSelectAll(event.target.checked)}
-            />
-            Select All (show all boxes)
-          </label>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
           {isReviewMode && (
@@ -271,30 +339,49 @@ const CadExtraction: FC<CadExtractionProps> = ({
       <div
         className="table-wrapper"
         ref={tableScrollRef}
-        style={{ flex: 1, minHeight: 0, overflow: "auto", fontSize: "0.88rem" }}
+        style={{ flex: 1, minHeight: 0, overflowX: "auto", overflowY: "auto", fontSize: "0.88rem" }}
       >
-        <table className="matches-table resizable-table">
+        <table className="matches-table resizable-table" style={{ minWidth: "900px", tableLayout: "fixed" }}>
           <thead>
             <tr>
-              <th>Item</th>
-              <th>Description</th>
-              <th>Notes</th>
-              {isReviewMode && <th>Actions</th>}
+              <th style={{ width: "100px" }}>Item</th>
+              <th style={{ width: "280px" }}>Description</th>
+              <th style={{ width: "90px" }}>Thickness</th>
+              <th style={{ width: "220px" }}>Prod. Rate</th>
+              <th style={{ width: "180px" }}>Note</th>
+              {isReviewMode && <th style={{ width: "80px" }}>Actions</th>}
             </tr>
           </thead>
           <tbody>
             {items.length === 0 ? (
               <tr className="matches-table__row">
-                <td colSpan={isReviewMode ? 4 : 3} style={{ textAlign: "center", color: "rgba(227,233,255,0.7)" }}>
+                <td colSpan={isReviewMode ? 6 : 5} style={{ textAlign: "center", color: "rgba(227,233,255,0.7)" }}>
                   No items extracted yet.
                 </td>
               </tr>
             ) : (
               groupedItems.flatMap(([code, group]) => {
+                const handleGroupDragOver = (event: React.DragEvent<HTMLTableRowElement>) => {
+                  if (!isReviewMode) return;
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = "move";
+                };
+                const handleGroupDrop = (event: React.DragEvent<HTMLTableRowElement>) => {
+                  if (!isReviewMode) return;
+                  event.preventDefault();
+                  const itemId = event.dataTransfer.getData("text/plain");
+                  if (!itemId) return;
+                  handleMoveItemToCode(itemId, code);
+                };
                 const groupRows: React.ReactNode[] = [
                   (
-                    <tr key={`group-${code}`} className="boq-group-row">
-                      <td colSpan={isReviewMode ? 4 : 3}>{code}</td>
+                    <tr
+                      key={`group-${code}`}
+                      className="boq-group-row"
+                      onDragOver={handleGroupDragOver}
+                      onDrop={handleGroupDrop}
+                    >
+                      <td colSpan={isReviewMode ? 6 : 5}>{code}</td>
                     </tr>
                   ),
                 ];
@@ -306,49 +393,201 @@ const CadExtraction: FC<CadExtractionProps> = ({
                     selectionSourceRef.current = "table";
                     setSelectedItemId(item.id);
                   };
+                  const handleRowDragStart = (event: React.DragEvent<HTMLTableRowElement>) => {
+                    if (!isReviewMode) return;
+                    event.dataTransfer.setData("text/plain", item.id);
+                    event.dataTransfer.effectAllowed = "move";
+                  };
+                  const handleRowDragOver = (event: React.DragEvent<HTMLTableRowElement>) => {
+                    if (!isReviewMode) return;
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "move";
+                  };
+                  const handleRowDrop = (event: React.DragEvent<HTMLTableRowElement>) => {
+                    if (!isReviewMode) return;
+                    event.preventDefault();
+                    const itemId = event.dataTransfer.getData("text/plain");
+                    if (!itemId) return;
+                    handleMoveItemToCode(itemId, code);
+                  };
+                  const searchQuery = prodRateSearchQuery[item.id] ?? "";
+                  const showDropdown = activeDropdownId === item.id && searchQuery.length >= 3;
+                  const filteredOptions = showDropdown
+                    ? productivityOptions
+                      .filter((option) =>
+                        option.description.toLowerCase().includes(searchQuery.toLowerCase())
+                      )
+                      .slice(0, 8)
+                    : [];
+                  const selectedOption = item.productivityRateId
+                    ? productivityOptionsById.get(item.productivityRateId)
+                    : null;
+                  const itemCodeDisplay = (item.item_code ?? "").trim() === "ITEM" ? "" : item.item_code || `Item ${idx + 1}`;
+                  const descDisplay = item.description || "—";
+                  const thicknessDisplay = item.thickness != null ? `${item.thickness} mm` : "—";
+                  const notesDisplay = (item.item_code ?? "").trim() === "ITEM" ? "" : (item.notes || "");
+                  const prodRateDisplay = selectedOption?.description || "—";
                   groupRows.push(
                     <tr
                       key={item.id}
                       className={`matches-table__row ${isLinked ? "is-linked" : ""}`}
                       onClick={handleRowClick}
+                      draggable={isReviewMode}
+                      onDragStart={handleRowDragStart}
+                      onDragOver={handleRowDragOver}
+                      onDrop={handleRowDrop}
                       ref={(el) => {
                         tableRowRefs.current[item.id] = el;
                       }}
                     >
-                      <td>
+                      <td title={itemCodeDisplay} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         {isReviewMode ? (
                           <input
                             type="text"
                             value={item.item_code}
                             onChange={(event) => handleItemFieldChange(item.id, "item_code", event.target.value)}
                             placeholder={`Item ${idx + 1}`}
+                            title={item.item_code}
                           />
                         ) : (
-                          (item.item_code ?? "").trim() === "ITEM" ? "" : item.item_code || `Item ${idx + 1}`
+                          itemCodeDisplay
                         )}
                       </td>
-                      <td>
+                      <td title={descDisplay} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         {isReviewMode ? (
                           <input
                             type="text"
                             value={item.description}
                             onChange={(event) => handleItemFieldChange(item.id, "description", event.target.value)}
                             placeholder="Description"
+                            title={item.description}
                           />
                         ) : (
-                          item.description || "—"
+                          descDisplay
                         )}
                       </td>
-                      <td>
+                      <td title={thicknessDisplay} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {isReviewMode ? (
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            value={item.thickness != null ? String(item.thickness) : ""}
+                            onChange={(event) => handleThicknessChange(item.id, event.target.value)}
+                            placeholder="mm"
+                            title={item.thickness != null ? `${item.thickness} mm` : ""}
+                          />
+                        ) : (
+                          thicknessDisplay
+                        )}
+                      </td>
+                      <td title={prodRateDisplay} style={{ position: "relative", overflow: "visible" }}>
+                        {isReviewMode ? (
+                          <div
+                            className="productivity-cell-with-action"
+                            ref={(el) => {
+                              dropdownAnchorRefs.current[item.id] = el;
+                            }}
+                            style={{ width: "100%" }}
+                          >
+                            {selectedOption ? (
+                              <div style={{ display: "flex", alignItems: "center", gap: "0.25rem", width: "100%" }}>
+                                <span
+                                  style={{
+                                    flex: 1,
+                                    overflow: "hidden",
+                                    textOverflow: "ellipsis",
+                                    whiteSpace: "nowrap",
+                                    fontSize: "0.85rem",
+                                    minWidth: 0,
+                                  }}
+                                  title={selectedOption.description}
+                                >
+                                  {selectedOption.description}
+                                </span>
+                                <button
+                                  type="button"
+                                  className="inline-remove-button"
+                                  onClick={() => handleClearProductivityRate(item.id)}
+                                  aria-label="Clear productivity rate"
+                                  style={{ flexShrink: 0, width: "20px", height: "20px", padding: 0, lineHeight: 1 }}
+                                >
+                                  ×
+                                </button>
+                              </div>
+                            ) : (
+                              <>
+                                <input
+                                  type="text"
+                                  value={searchQuery}
+                                  onFocus={() => {
+                                    if (searchQuery.length >= 3) {
+                                      setActiveDropdownId(item.id);
+                                    }
+                                  }}
+                                  onBlur={() => setTimeout(() => setActiveDropdownId(null), 150)}
+                                  onChange={(event) => {
+                                    const value = event.target.value;
+                                    setProdRateSearchQuery((prev) => ({ ...prev, [item.id]: value }));
+                                    if (value.length >= 3) {
+                                      setActiveDropdownId(item.id);
+                                    } else {
+                                      setActiveDropdownId(null);
+                                    }
+                                  }}
+                                  placeholder="Search prod. rates..."
+                                  style={{ width: "100%" }}
+                                />
+                                {filteredOptions.length > 0 && (
+                                  <div
+                                    className="pricing-match-menu"
+                                    style={{
+                                      position: "absolute",
+                                      top: "100%",
+                                      left: 0,
+                                      width: "280px",
+                                      zIndex: 100,
+                                      maxHeight: "200px",
+                                      overflowY: "auto",
+                                    }}
+                                    onWheel={(event) => event.stopPropagation()}
+                                    onScroll={(event) => event.stopPropagation()}
+                                  >
+                                    {filteredOptions.map((option) => (
+                                      <button
+                                        key={option.id}
+                                        type="button"
+                                        className="pricing-match-menu__item"
+                                        onMouseDown={(event) => {
+                                          event.preventDefault();
+                                          handleSelectProductivityRate(item.id, option.id);
+                                        }}
+                                        title={option.description}
+                                      >
+                                        {option.description}
+                                      </button>
+                                    ))}
+                                  </div>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        ) : (
+                          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>
+                            {prodRateDisplay}
+                          </span>
+                        )}
+                      </td>
+                      <td title={notesDisplay} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         {isReviewMode ? (
                           <input
                             type="text"
                             value={item.notes}
                             onChange={(event) => handleItemFieldChange(item.id, "notes", event.target.value)}
-                            placeholder="Notes"
+                            placeholder="Note"
+                            title={item.notes}
                           />
                         ) : (
-                          (item.item_code ?? "").trim() === "ITEM" ? "" : item.notes || "—"
+                          notesDisplay
                         )}
                       </td>
                       {isReviewMode && (
@@ -457,7 +696,7 @@ const CadExtraction: FC<CadExtractionProps> = ({
         headerLeft={headerLeft}
         headerCompact
         enableOverlayOnSelectionChange
-        showAllOverlays={selectAll}
+        showAllOverlays={false}
         headerActions={
           <div style={{ display: "flex", gap: "0.5rem" }}>
             {onBack && (
