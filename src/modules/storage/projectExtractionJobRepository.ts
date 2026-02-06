@@ -27,7 +27,7 @@ export async function upsertProjectExtractJob(params: {
       idempotencyKey: params.idempotencyKey,
     },
     {
-      $setOnInsert: {
+      $set: {
         status: params.status ?? "queued",
         stage: "queued",
         message: "Queued",

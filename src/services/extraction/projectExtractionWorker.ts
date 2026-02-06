@@ -289,90 +289,106 @@ async function processJob(jobId: string): Promise<void> {
           parts: Map<number, { status: "pending" | "processing" | "ready" | "failed"; error?: string }>;
         }
       >();
-      const result = await extractBoqItemsFromExcel({
-        filePath: resolveStoredFilePath(file),
-        fileName: file.originalName,
-        sheetNames: retrySheets,
-        retryParts: Object.keys(retryParts).length > 0 ? retryParts : undefined,
-        onSheetStage: async ({ sheetName, stage, itemCount, errorMessage, chunkIndex, chunkCount }) => {
-          const chunkLabel =
-            typeof chunkIndex === "number" && typeof chunkCount === "number" && chunkCount > 1
-              ? ` (part ${chunkIndex + 1}/${chunkCount})`
-              : "";
-          const entry = sheetStatus.get(sheetName) ?? {
-            status: "pending" as const,
-            parts: new Map<number, { status: "pending" | "processing" | "ready" | "failed"; error?: string }>(),
-          };
-          if (stage === "calling") {
-            entry.status = "processing";
-            if (typeof chunkIndex === "number") {
-              entry.parts.set(chunkIndex, { status: "processing" });
+      let result: Awaited<ReturnType<typeof extractBoqItemsFromExcel>>;
+      try {
+        result = await extractBoqItemsFromExcel({
+          filePath: resolveStoredFilePath(file),
+          fileName: file.originalName,
+          sheetNames: retrySheets,
+          retryParts: Object.keys(retryParts).length > 0 ? retryParts : undefined,
+          onSheetStage: async ({ sheetName, stage, itemCount, errorMessage, chunkIndex, chunkCount }) => {
+            const chunkLabel =
+              typeof chunkIndex === "number" && typeof chunkCount === "number" && chunkCount > 1
+                ? ` (part ${chunkIndex + 1}/${chunkCount})`
+                : "";
+            const entry = sheetStatus.get(sheetName) ?? {
+              status: "pending" as const,
+              parts: new Map<number, { status: "pending" | "processing" | "ready" | "failed"; error?: string }>(),
+            };
+            if (stage === "calling") {
+              entry.status = "processing";
+              if (typeof chunkIndex === "number") {
+                entry.parts.set(chunkIndex, { status: "processing" });
+              }
+              sheetStatus.set(sheetName, entry);
+              return;
             }
-            sheetStatus.set(sheetName, entry);
-            return;
-          }
-          if (stage === "received") {
-            entry.status = "ready";
+            if (stage === "received") {
+              entry.status = "ready";
+              if (typeof chunkIndex === "number") {
+                entry.parts.set(chunkIndex, { status: "ready" });
+              }
+              sheetStatus.set(sheetName, entry);
+              await createProjectLog({
+                userId: String(job.userId),
+                projectId: String(job.projectId),
+                fileId: String(job.fileId),
+                message: `AI response received for BOQ sheet ${sheetName}${chunkLabel} (${itemCount ?? 0} items).`,
+              });
+              return;
+            }
+            entry.status = "failed";
+            entry.error = errorMessage;
             if (typeof chunkIndex === "number") {
-              entry.parts.set(chunkIndex, { status: "ready" });
+              entry.parts.set(chunkIndex, { status: "failed", error: errorMessage });
             }
             sheetStatus.set(sheetName, entry);
             await createProjectLog({
               userId: String(job.userId),
               projectId: String(job.projectId),
               fileId: String(job.fileId),
-              message: `AI response received for BOQ sheet ${sheetName}${chunkLabel} (${itemCount ?? 0} items).`,
+              level: "error",
+              message: `AI failed for BOQ sheet ${sheetName}${chunkLabel}${errorMessage ? `: ${errorMessage}` : ""}.`,
             });
-            return;
-          }
-          entry.status = "failed";
-          entry.error = errorMessage;
-          if (typeof chunkIndex === "number") {
-            entry.parts.set(chunkIndex, { status: "failed", error: errorMessage });
-          }
-          sheetStatus.set(sheetName, entry);
-          await createProjectLog({
-            userId: String(job.userId),
-            projectId: String(job.projectId),
-            fileId: String(job.fileId),
-            level: "error",
-            message: `AI failed for BOQ sheet ${sheetName}${chunkLabel}${errorMessage ? `: ${errorMessage}` : ""}.`,
-          });
-        },
-        onSheetResult: async ({ sheetName, items: sheetItems, chunkCount }) => {
-          const mapped = (sheetItems || []).map((item) => ({
-            userId: job.userId,
-            projectId: job.projectId,
-            fileId: job.fileId,
-            source: "boq" as const,
-            item_code: item.item_key || "ITEM",
-            description: item.description || "N/A",
-            notes: item.notes || "N/A",
-            box: null,
-            metadata: {
-              sheetName,
-              sheetIndex: typeof item.sheetIndex === "number" ? item.sheetIndex : undefined,
-              category: item.category || undefined,
-              subcategory: item.subcategory || undefined,
-              rowIndex: Number.isFinite(item.rowIndex) ? item.rowIndex : 0,
-              chunkIndex: typeof item.chunkIndex === "number" ? item.chunkIndex : undefined,
-              chunkCount: typeof item.chunkCount === "number" ? item.chunkCount : chunkCount,
-              fields: {
-                qty: item.quantity || "",
-                quantity: item.quantity || "",
-                unit: item.unit || "",
-                rate: item.rate || "",
-                amount: "",
+          },
+          onSheetResult: async ({ sheetName, items: sheetItems, chunkCount }) => {
+            const mapped = (sheetItems || []).map((item) => ({
+              userId: job.userId,
+              projectId: job.projectId,
+              fileId: job.fileId,
+              source: "boq" as const,
+              item_code: item.item_key || "ITEM",
+              description: item.description || "N/A",
+              notes: item.notes || "N/A",
+              box: null,
+              metadata: {
+                sheetName,
+                sheetIndex: typeof item.sheetIndex === "number" ? item.sheetIndex : undefined,
+                category: item.category || undefined,
+                subcategory: item.subcategory || undefined,
+                rowIndex: Number.isFinite(item.rowIndex) ? item.rowIndex : 0,
+                chunkIndex: typeof item.chunkIndex === "number" ? item.chunkIndex : undefined,
+                chunkCount: typeof item.chunkCount === "number" ? item.chunkCount : chunkCount,
+                fields: {
+                  qty: item.quantity || "",
+                  quantity: item.quantity || "",
+                  unit: item.unit || "",
+                  rate: item.rate || "",
+                  amount: "",
+                },
               },
-            },
-          }));
-          if (mapped.length > 0) {
-            await ProjectItemModel.insertMany(mapped);
-            boqInsertedDuringExtraction = true;
-          }
-          collectedItems.push(...mapped);
-        },
-      });
+            }));
+            if (mapped.length > 0) {
+              await ProjectItemModel.insertMany(mapped);
+              boqInsertedDuringExtraction = true;
+            }
+            collectedItems.push(...mapped);
+          },
+        });
+      } catch (error) {
+        await ProjectFileModel.updateOne(
+          { _id: file._id },
+          { status: "failed", extractionStage: null }
+        ).exec();
+        await createProjectLog({
+          userId: String(job.userId),
+          projectId: String(job.projectId),
+          fileId: String(job.fileId),
+          level: "error",
+          message: `BOQ extraction failed for ${file.originalName}: ${error instanceof Error ? error.message : String(error)}`,
+        });
+        throw error;
+      }
       items = collectedItems;
 
       const existingMap = new Map(

@@ -748,6 +748,14 @@ export default function App() {
     () => projectItems.filter((item) => item.source === "cad"),
     [projectItems]
   );
+  const drawingItemsForPricing = useMemo(
+    () =>
+      projectItems.filter(
+        (item) =>
+          item.source === "cad" || (item.source === "manual" && Boolean(item.productivityRateId))
+      ),
+    [projectItems]
+  );
   const scheduleItems = useMemo(
     () => projectItems.filter((item) => item.source === "schedule"),
     [projectItems]
@@ -1154,7 +1162,7 @@ export default function App() {
           <Pricing
             boqItems={boqItems}
             scheduleItems={scheduleItems}
-            drawingItems={drawingItems}
+            drawingItems={drawingItemsForPricing}
             projectName={activeProject?.name}
             projectId={activeProject?.id}
             headerTop={renderStepper()}

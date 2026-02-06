@@ -58,6 +58,16 @@ const projectUpload = upload.fields([
 
 const router = Router();
 
+async function syncProjectStatusByJobs(userId: string, projectId: string): Promise<"finalized" | "analyzing"> {
+  const pending = await ProjectExtractJobModel.countDocuments({
+    projectId,
+    status: { $in: ["queued", "processing"] },
+  }).exec();
+  const status = pending === 0 ? "finalized" : "analyzing";
+  await updateProjectStatus(userId, projectId, status);
+  return status;
+}
+
 function getUserId(req: AuthRequest): string {
   const user = req.user;
   if (!user?._id) throw new Error("User not found");
@@ -280,11 +290,13 @@ router.post(
         )
       );
 
+      const projectStatus = await syncProjectStatusByJobs(userId, String(project._id));
+
       res.status(200).json({
         project: {
           id: project._id,
           name: project.name,
-          status: project.status,
+          status: projectStatus,
         },
         files: createdFiles.map((file) => ({
           id: file._id,
@@ -547,6 +559,8 @@ router.delete(
         fileId,
         message: `File deleted: ${file.originalName}.`,
       });
+
+      await syncProjectStatusByJobs(userId, projectId);
 
       res.status(204).send();
     } catch (error) {

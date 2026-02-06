@@ -120,8 +120,8 @@ Extract ALL component details and sub-layers for each Item Code (e.g., PV-02, ST
     *   Details may be linked to items by: arrows, leader lines, proximity, or being positioned close to the item.
 3.  CRITICAL: **Extract ALL Details:** Don't miss ANY detail (text block) that is required for the BOQ estimation. Do NOT miss any component layer or material specification, if you're not sure to which item it belongs, assign it to the closest item.
 4.  **Extract each text block as it is:** Do not change, merge, or split text blocks. Each block is a single detail.
-5.  **No orphan text blocks:** You must capture every visible text block that looks like a material/detail note. If a block is not clearly linked by arrows/lines, assign it to the closest Item Code by spatial proximity.
-6.  CRITICAL: **Extract Thickness:** If a thickness value is explicitly stated in the detail text (e.g., "100MM", "150 MM", "50mm"), extract it as a numeric value in millimeters.
+5.  CRITICAL: **Extract Thickness:** If a thickness value is explicitly stated in the detail text (e.g., "100MM", "150 MM", "50mm"), extract it as a numeric value in millimeters.
+6.  CRITICAL: if the detail is duplicated but belongs to different item codes, extract it for EACH item code it belongs to.
 
 **IMPORTANT RULES:**
 *   Do not hallucinate. Only include text blocks that are visible on the drawing. If in doubt, include it and attach it to the closest item code.
