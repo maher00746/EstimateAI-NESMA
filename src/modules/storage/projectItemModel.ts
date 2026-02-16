@@ -52,7 +52,8 @@ const ProjectItemSchema = new Schema<ProjectItemDocument>(
     source: { type: String, required: true },
     item_code: { type: String, required: true },
     description: { type: String, required: true },
-    notes: { type: String, required: true },
+    // Notes are optional and can be empty string.
+    notes: { type: String, default: "" },
     box: { type: CadBoxSchema, default: null },
     thickness: { type: Number, default: null },
     productivityRateId: { type: String, default: null },
