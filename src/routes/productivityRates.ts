@@ -177,6 +177,7 @@ router.post("/import", upload.single("file"), async (req: AuthRequest, res: Resp
       }
       normalizedBlocks.push({
         id: typeof data.id === "string" && data.id.trim() ? data.id : randomUUID(),
+        code: toStringValue(data.code || String(blockIndex + 1)),
         description: toStringValue(data.description),
         unit: toStringValue(data.unit),
         hoursPerDay,

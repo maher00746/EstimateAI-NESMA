@@ -10,6 +10,7 @@ export type PricingPayload = {
   qtyOverrideByItemId?: Record<string, unknown>;
   collapsedByItemId?: Record<string, unknown>;
   completedByItemId?: Record<string, unknown>;
+  blockCodeByItemId?: Record<string, unknown>;
 };
 
 export async function getPricing(userId: string, projectId: string) {
@@ -30,6 +31,7 @@ export async function upsertPricing(userId: string, projectId: string, payload: 
         qtyOverrideByItemId: payload.qtyOverrideByItemId ?? {},
         collapsedByItemId: payload.collapsedByItemId ?? {},
         completedByItemId: payload.completedByItemId ?? {},
+        blockCodeByItemId: payload.blockCodeByItemId ?? {},
       },
     },
     { new: true, upsert: true, setDefaultsOnInsert: true }

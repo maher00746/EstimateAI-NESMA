@@ -435,6 +435,38 @@ export async function suggestProductivityItems(
   });
 }
 
+export interface SearchBlocksSubitem {
+  description: string;
+  code: string;
+  qty: string;
+  thickness: number | null;
+}
+
+export interface SearchBlocksBlock {
+  projectId: string;
+  projectName: string;
+  itemId: string;
+  description: string;
+  subitems: SearchBlocksSubitem[];
+}
+
+export interface SearchBlocksResponse {
+  blocks: SearchBlocksBlock[];
+  total: number;
+}
+
+export async function searchPricingBlocks(
+  projectId: string,
+  params: { blockCode?: string; text?: string; page?: number; pageSize?: number }
+): Promise<SearchBlocksResponse> {
+  const searchParams = new URLSearchParams({ projectId });
+  if (params.blockCode?.trim()) searchParams.set("blockCode", params.blockCode.trim());
+  if (params.text?.trim()) searchParams.set("text", params.text.trim());
+  if (params.page != null && params.page >= 1) searchParams.set("page", String(params.page));
+  if (params.pageSize != null && params.pageSize >= 1) searchParams.set("pageSize", String(params.pageSize));
+  return safeFetch(`${API_BASE}/api/pricing/search-blocks?${searchParams.toString()}`);
+}
+
 export async function retryProjectFile(projectId: string, fileId: string, idempotencyKey: string): Promise<{
   id: string;
   fileId: string;

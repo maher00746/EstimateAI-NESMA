@@ -652,7 +652,7 @@ async function processJob(jobId: string): Promise<void> {
           source: "cad" as const,
           item_code: item.item_code || "NOTE",
           description: item.description || "N/A",
-          notes: item.notes || "N/A",
+          notes: item.notes || "",
           box: item.box ?? null,
           thickness: typeof item.thickness === "number" ? item.thickness : null,
         }));

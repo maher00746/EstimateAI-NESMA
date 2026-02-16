@@ -578,7 +578,7 @@ export default function App() {
           addProjectFileItem(activeProject.id, activeFile.id, {
             item_code: item.item_code || "NOTE",
             description: item.description || "N/A",
-            notes: item.notes || "N/A",
+            notes: item.notes ?? "",
             box: item.box ?? null,
             metadata: item.metadata ?? null,
             thickness: item.thickness ?? null,

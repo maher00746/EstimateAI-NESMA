@@ -124,7 +124,7 @@ Extract ALL component details and sub-layers for each Item Code (e.g., PV-02, ST
 6.  CRITICAL: if the detail is duplicated but belongs to different item codes, extract it for EACH item code it belongs to.
 
 **IMPORTANT RULES:**
-*   Do not hallucinate. Only include text blocks that are visible on the drawing. If in doubt, include it and attach it to the closest item code.
+*   Do not hallucinate. double check and extract all details.
 *   For thickness: ONLY provide a value if the thickness is explicitly mentioned in the detail. If no thickness is stated, set thickness to null.
 *   Thickness MUST be returned as a NUMBER in MILLIMETERS (e.g., 100, 150, 50), not as a string with units.
 

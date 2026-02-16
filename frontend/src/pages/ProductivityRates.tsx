@@ -17,8 +17,9 @@ const createRow = (label = "", overrides: Partial<ProductivityRatesRow> = {}): P
   ...overrides,
 });
 
-const createBlock = (): ProductivityRatesBlock => ({
+const createBlock = (code = ""): ProductivityRatesBlock => ({
   id: uuidv4(),
+  code,
   description: "",
   unit: "",
   hoursPerDay: "",
@@ -49,8 +50,39 @@ const getPrimaryEquipmentRowValues = (block: ProductivityRatesBlock) => {
   };
 };
 
-const normalizeBlocks = (inputBlocks: ProductivityRatesBlock[]): ProductivityRatesBlock[] =>
-  inputBlocks.map((block) => {
+const normalizeCodeValue = (value?: string | null) => (value ?? "").trim();
+
+const assignMissingCodes = (inputBlocks: ProductivityRatesBlock[]): ProductivityRatesBlock[] => {
+  const used = new Set<string>();
+  inputBlocks.forEach((block) => {
+    const trimmed = normalizeCodeValue(block.code);
+    if (trimmed) used.add(trimmed);
+  });
+  let nextCode = 1;
+  return inputBlocks.map((block) => {
+    const trimmed = normalizeCodeValue(block.code);
+    if (trimmed) return { ...block, code: trimmed };
+    while (used.has(String(nextCode))) {
+      nextCode += 1;
+    }
+    const assigned = String(nextCode);
+    used.add(assigned);
+    nextCode += 1;
+    return { ...block, code: assigned };
+  });
+};
+
+const getNextAvailableCode = (inputBlocks: ProductivityRatesBlock[]): string => {
+  const used = new Set(inputBlocks.map((block) => normalizeCodeValue(block.code)).filter(Boolean));
+  let nextCode = 1;
+  while (used.has(String(nextCode))) {
+    nextCode += 1;
+  }
+  return String(nextCode);
+};
+
+const normalizeBlocks = (inputBlocks: ProductivityRatesBlock[]): ProductivityRatesBlock[] => {
+  const normalized = inputBlocks.map((block) => {
     const legacyHours = block.hoursPerDay ?? "";
     const legacyProductivity = block.dailyProductivity ?? "";
     const applyEquipmentDefaults = (row: ProductivityRatesRow): ProductivityRatesRow => ({
@@ -61,6 +93,7 @@ const normalizeBlocks = (inputBlocks: ProductivityRatesBlock[]): ProductivityRat
     });
     return {
       ...block,
+      code: normalizeCodeValue(block.code),
       hoursPerDay: block.hoursPerDay ?? "",
       dailyProductivity: block.dailyProductivity ?? "",
       manpowerRows: block.manpowerRows.map((row) => ({
@@ -70,10 +103,12 @@ const normalizeBlocks = (inputBlocks: ProductivityRatesBlock[]): ProductivityRat
       equipmentRows: block.equipmentRows.map(applyEquipmentDefaults),
     };
   });
+  return assignMissingCodes(normalized);
+};
 
 export default function ProductivityRates({ projectName }: ProductivityRatesProps) {
   const [factor, setFactor] = useState("1");
-  const [blocks, setBlocks] = useState<ProductivityRatesBlock[]>([createBlock()]);
+  const [blocks, setBlocks] = useState<ProductivityRatesBlock[]>([createBlock("1")]);
   const [saveMessage, setSaveMessage] = useState("");
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -94,7 +129,7 @@ export default function ProductivityRates({ projectName }: ProductivityRatesProp
   >(null);
 
   const defaultPayload = useMemo<ProductivityRatesPayload>(
-    () => ({ factor: "1", blocks: [createBlock()], updatedAt: null }),
+    () => ({ factor: "1", blocks: [createBlock("1")], updatedAt: null }),
     []
   );
 
@@ -234,7 +269,7 @@ export default function ProductivityRates({ projectName }: ProductivityRatesProp
   );
 
   const addBlock = useCallback(() => {
-    setBlocks((current) => [...current, createBlock()]);
+    setBlocks((current) => [...current, createBlock(getNextAvailableCode(current))]);
   }, []);
 
   const removeBlock = useCallback((blockId: string) => {
@@ -252,8 +287,14 @@ export default function ProductivityRates({ projectName }: ProductivityRatesProp
   }, [confirmDelete, removeBlock, removeRow]);
 
   const handleSave = useCallback(() => {
-    setSaving(true);
     setErrorMessage("");
+    const trimmedCodes = blocks.map((block) => normalizeCodeValue(block.code)).filter(Boolean);
+    const duplicateCode = trimmedCodes.find((code, index) => trimmedCodes.indexOf(code) !== index);
+    if (duplicateCode) {
+      setErrorMessage(`Code "${duplicateCode}" is already used. Please choose a unique code.`);
+      return;
+    }
+    setSaving(true);
     const factorValue = parseNumber(factor);
     const enrichedBlocks = blocks.map((block) => {
       const hoursValue = parseNumber(block.hoursPerDay);
@@ -263,6 +304,7 @@ export default function ProductivityRates({ projectName }: ProductivityRatesProp
       const manpowerRate = manpowerMh * factorValue;
       return {
         ...block,
+        code: normalizeCodeValue(block.code),
         manpowerMh: serializeNumber(manpowerMh),
         manpowerRate: serializeNumber(manpowerRate),
         manpowerRows: block.manpowerRows.map((row) => ({
@@ -417,6 +459,7 @@ export default function ProductivityRates({ projectName }: ProductivityRatesProp
                   <table className="productivity-table productivity-table--compact">
                     <thead>
                       <tr>
+                        <th className="productivity-col-code">Code</th>
                         <th>Description</th>
                         <th className="productivity-col-unit">Unit</th>
                         <th>Manpower / Equipment Required</th>
@@ -438,6 +481,18 @@ export default function ProductivityRates({ projectName }: ProductivityRatesProp
                         const manpowerRate = manpowerMh * factorValue;
                         return (
                           <tr key={row.id} className="productivity-row productivity-row--manpower">
+                            {showShared && (
+                              <td rowSpan={totalRows} className="productivity-cell--shared productivity-col-code">
+                                <input
+                                  type="text"
+                                  value={block.code}
+                                  onChange={(event) =>
+                                    updateBlock(block.id, (current) => ({ ...current, code: event.target.value }))
+                                  }
+                                  placeholder={`${index + 1}`}
+                                />
+                              </td>
+                            )}
                             {showShared && (
                               <td rowSpan={totalRows} className="productivity-cell--shared">
                                 <textarea

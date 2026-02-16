@@ -19,6 +19,7 @@ export interface ProductivityRatesEquipmentRow {
 
 export interface ProductivityRatesBlock {
   id: string;
+  code: string;
   description: string;
   unit: string;
   hoursPerDay: string;
@@ -63,6 +64,7 @@ const ProductivityRatesEquipmentRowSchema = new Schema<ProductivityRatesEquipmen
 const ProductivityRatesBlockSchema = new Schema<ProductivityRatesBlock>(
   {
     id: { type: String, required: true },
+    code: { type: String, default: "" },
     description: { type: String, default: "" },
     unit: { type: String, default: "" },
     hoursPerDay: { type: String, default: "" },

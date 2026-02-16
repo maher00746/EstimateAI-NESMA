@@ -12,6 +12,7 @@ export interface PricingDocument extends mongoose.Document {
   qtyOverrideByItemId: Record<string, unknown>;
   collapsedByItemId: Record<string, unknown>;
   completedByItemId: Record<string, unknown>;
+  blockCodeByItemId: Record<string, unknown>;
   updatedAt: Date;
   createdAt: Date;
 }
@@ -29,6 +30,7 @@ const PricingSchema = new Schema<PricingDocument>(
     qtyOverrideByItemId: { type: Schema.Types.Mixed, default: {} },
     collapsedByItemId: { type: Schema.Types.Mixed, default: {} },
     completedByItemId: { type: Schema.Types.Mixed, default: {} },
+    blockCodeByItemId: { type: Schema.Types.Mixed, default: {} },
   },
   { timestamps: true }
 );

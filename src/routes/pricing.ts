@@ -2,6 +2,8 @@ import { Router } from "express";
 import type { Response, NextFunction } from "express";
 import { AuthRequest } from "../middleware/auth";
 import { getPricing, upsertPricing } from "../modules/storage/pricingRepository";
+import { listProjects } from "../modules/storage/projectRepository";
+import { listProjectItems } from "../modules/storage/projectItemRepository";
 import {
   suggestProductivityForPricing,
   ProductivitySuggestBlock,
@@ -15,6 +17,92 @@ function getUserId(req: AuthRequest): string {
   if (!user?._id) throw new Error("User not found");
   return String(user._id);
 }
+
+/** Normalize for search: trim, lower case */
+function normSearch(value: string): string {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+const SEARCH_BLOCKS_MAX = 500;
+const SEARCH_BLOCKS_PAGE_SIZE_DEFAULT = 5;
+
+/** Search blocks from other projects by block code and/or text (main item description). */
+router.get("/search-blocks", async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const userId = getUserId(req);
+    const projectId = String(req.query.projectId ?? "").trim();
+    const blockCode = normSearch(String(req.query.blockCode ?? ""));
+    const text = normSearch(String(req.query.text ?? ""));
+    const page = Math.max(1, parseInt(String(req.query.page ?? "1"), 10) || 1);
+    const pageSize = Math.min(50, Math.max(1, parseInt(String(req.query.pageSize ?? String(SEARCH_BLOCKS_PAGE_SIZE_DEFAULT)), 10) || SEARCH_BLOCKS_PAGE_SIZE_DEFAULT));
+
+    if (!projectId) {
+      return res.status(400).json({ message: "projectId is required" });
+    }
+    if (!blockCode && !text) {
+      return res.status(200).json({ blocks: [], total: 0 });
+    }
+
+    const projects = await listProjects(userId);
+    const otherProjects = projects.filter((p) => String(p._id) !== projectId);
+    const blocks: Array<{
+      projectId: string;
+      projectName: string;
+      itemId: string;
+      description: string;
+      subitems: Array<{ description: string; code: string; qty: string; thickness: number | null }>;
+    }> = [];
+
+    for (const proj of otherProjects) {
+      if (blocks.length >= SEARCH_BLOCKS_MAX) break;
+      const pid = String(proj._id);
+      const [items, pricing] = await Promise.all([
+        listProjectItems(userId, pid),
+        getPricing(userId, pid),
+      ]);
+      const pricedItems = items.filter((item) => String(item.item_code ?? "").trim() !== "ITEM");
+      const subItemsByItemId = (pricing?.subItemsByItemId ?? {}) as Record<
+        string,
+        Array<{ code?: string; description?: string; qty?: string; thickness?: number | null }>
+      >;
+      const blockCodeByItemId = (pricing?.blockCodeByItemId ?? {}) as Record<string, string>;
+
+      for (const item of pricedItems) {
+        if (blocks.length >= SEARCH_BLOCKS_MAX) break;
+        const itemId = String(item._id);
+        const subs = subItemsByItemId[itemId];
+        if (!Array.isArray(subs) || subs.length === 0) continue;
+
+        const mainDesc = String(item.description ?? "").trim();
+        const blockCodeVal = normSearch(blockCodeByItemId[itemId] ?? "");
+
+        const matchBlockCode = !blockCode || blockCodeVal === blockCode;
+        const matchText = !text || mainDesc.toLowerCase().includes(text);
+        if (!matchBlockCode || !matchText) continue;
+
+        blocks.push({
+          projectId: pid,
+          projectName: proj.name ?? "Unnamed",
+          itemId,
+          description: mainDesc || "—",
+          subitems: subs.map((s) => ({
+            description: String(s.description ?? "").trim() || "—",
+            code: String(s.code ?? "").trim() || "—",
+            qty: String(s.qty ?? "").trim() || "—",
+            thickness: s.thickness != null && Number.isFinite(s.thickness) ? s.thickness : null,
+          })),
+        });
+      }
+    }
+
+    const total = blocks.length;
+    const start = (page - 1) * pageSize;
+    const pageBlocks = blocks.slice(start, start + pageSize);
+    res.status(200).json({ blocks: pageBlocks, total });
+  } catch (error) {
+    next(error);
+  }
+});
 
 router.get("/:projectId", async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
@@ -35,6 +123,7 @@ router.get("/:projectId", async (req: AuthRequest, res: Response, next: NextFunc
         qtyOverrideByItemId: {},
         collapsedByItemId: {},
         completedByItemId: {},
+        blockCodeByItemId: {},
         updatedAt: null,
       });
     }
@@ -48,6 +137,7 @@ router.get("/:projectId", async (req: AuthRequest, res: Response, next: NextFunc
       qtyOverrideByItemId: record.qtyOverrideByItemId ?? {},
       collapsedByItemId: record.collapsedByItemId ?? {},
       completedByItemId: record.completedByItemId ?? {},
+      blockCodeByItemId: record.blockCodeByItemId ?? {},
       updatedAt: record.updatedAt,
     });
   } catch (error) {
@@ -72,6 +162,7 @@ router.put("/:projectId", async (req: AuthRequest, res: Response, next: NextFunc
       qtyOverrideByItemId = {},
       collapsedByItemId = {},
       completedByItemId = {},
+      blockCodeByItemId = {},
     } = req.body ?? {};
     if (typeof percentage !== "string" || typeof idleText !== "string" || typeof poRate !== "string" || typeof mpHourlyRate !== "string") {
       return res.status(400).json({ message: "percentage, idleText, poRate, mpHourlyRate must be strings" });
@@ -86,6 +177,7 @@ router.put("/:projectId", async (req: AuthRequest, res: Response, next: NextFunc
       qtyOverrideByItemId: typeof qtyOverrideByItemId === "object" && qtyOverrideByItemId ? qtyOverrideByItemId : {},
       collapsedByItemId: typeof collapsedByItemId === "object" && collapsedByItemId ? collapsedByItemId : {},
       completedByItemId: typeof completedByItemId === "object" && completedByItemId ? completedByItemId : {},
+      blockCodeByItemId: typeof blockCodeByItemId === "object" && blockCodeByItemId ? blockCodeByItemId : {},
     });
     res.status(200).json({
       percentage: saved.percentage ?? "10",
@@ -97,6 +189,7 @@ router.put("/:projectId", async (req: AuthRequest, res: Response, next: NextFunc
       qtyOverrideByItemId: saved.qtyOverrideByItemId ?? {},
       collapsedByItemId: saved.collapsedByItemId ?? {},
       completedByItemId: saved.completedByItemId ?? {},
+      blockCodeByItemId: saved.blockCodeByItemId ?? {},
       updatedAt: saved.updatedAt,
     });
   } catch (error) {

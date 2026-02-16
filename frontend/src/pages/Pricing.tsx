@@ -3,8 +3,18 @@ import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
 import { v4 as uuidv4 } from "uuid";
 import type { EstimationRow, PricingPayload, ProductivityRatesBlock, ProjectItem } from "../types";
-import { getPricing, getProductivityRates, savePricing, suggestProductivityItems } from "../services/api";
-import type { ProductivitySuggestResponse } from "../services/api";
+import {
+  getPricing,
+  getProductivityRates,
+  savePricing,
+  suggestProductivityItems,
+  searchPricingBlocks,
+} from "../services/api";
+import type {
+  ProductivitySuggestResponse,
+  SearchBlocksBlock,
+  SearchBlocksSubitem,
+} from "../services/api";
 
 type PricingProps = {
   boqItems: ProjectItem[];
@@ -27,10 +37,18 @@ type PricingPayloadWithTracking = PricingPayload & {
 
 type PricingSubItem = {
   id: string;
+  /** Prod rate item code; editable, used to lookup and populate from productivity rates */
+  code?: string;
   description: string;
+  /** User note linked from CAD detail rows */
+  note?: string;
+  /** Thickness in mm; when set, sub row qty = main row qty * thickness * 0.001 */
+  thickness?: number | null;
   productivityId?: string;
   suggestedIds?: string[];
   qty?: string;
+  /** Unit from productivity rate item when set; otherwise main item unit is used for display */
+  unit?: string;
   unitMh: number;
   unitWagesRate?: number;
   unitEquipRate: number;
@@ -41,6 +59,7 @@ type PricingSubItem = {
 
 type ProductivityOption = {
   id: string;
+  code: string;
   description: string;
   unit: string;
   unitMh: number;
@@ -74,8 +93,11 @@ type PricingHeader = {
 };
 
 const DIRECT_HEADERS: PricingHeader[] = [
-  { key: "code", label: "", group: "direct" },
+  { key: "action", label: "", group: "direct" },
+  { key: "code", label: "CODE", group: "direct" },
   { key: "description", label: "Description", group: "direct" },
+  { key: "note", label: "Note", group: "direct" },
+  { key: "thickness", label: "Thickness", group: "direct" },
   { key: "qty", label: "Qty", group: "direct" },
   { key: "unit", label: "Unit", group: "direct" },
   { key: "unit-mh", label: "Unit MH", group: "direct" },
@@ -131,6 +153,9 @@ const SUMMARY_HEADERS = [
 const normalizeColumn = (value: string): string =>
   value.trim().toLowerCase().replace(/\s+/g, " ");
 
+const normalizeCode = (value: string): string =>
+  String(value ?? "").trim().toLowerCase();
+
 const parseNumber = (value: string | number | null | undefined): number => {
   if (value === null || value === undefined) return 0;
   if (typeof value === "number") return Number.isFinite(value) ? value : 0;
@@ -162,6 +187,14 @@ const parseThickness = (value: unknown): number | null => {
     return strict === null ? null : strict;
   }
   return null;
+};
+
+/** Effective qty for a sub row: when thickness is set, qty = mainQty * thickness (mm) * 0.001 */
+const getSubRowEffectiveQty = (row: PricingSubItem, mainQtyDisplay: string): number => {
+  const mainQty = parseNumber(mainQtyDisplay);
+  const thick = row.thickness != null && Number.isFinite(row.thickness) ? row.thickness : null;
+  if (thick !== null) return mainQty * thick * 0.001;
+  return parseNumber(row.qty ?? mainQtyDisplay);
 };
 
 const formatRounded = (value: number): string => {
@@ -241,7 +274,11 @@ export default function Pricing({
   const [qtyOverrideByItemId, setQtyOverrideByItemId] = useState<Record<string, string>>({});
   const [collapsedByItemId, setCollapsedByItemId] = useState<Record<string, boolean>>({});
   const [completedByItemId, setCompletedByItemId] = useState<Record<string, boolean>>({});
+  const [blockCodeByItemId, setBlockCodeByItemId] = useState<Record<string, string>>({});
   const [activeRowId, setActiveRowId] = useState<string | null>(null);
+  const [rowCodeErrorByRowId, setRowCodeErrorByRowId] = useState<Record<string, string>>({});
+  const [codeLoadingByRowId, setCodeLoadingByRowId] = useState<Record<string, boolean>>({});
+  const [blockCodeLoadingByItemId, setBlockCodeLoadingByItemId] = useState<Record<string, boolean>>({});
   const menuAnchorRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const [menuPositionTick, setMenuPositionTick] = useState(0);
   const [saving, setSaving] = useState(false);
@@ -254,6 +291,16 @@ export default function Pricing({
   const [suggestionCallsCompleted, setSuggestionCallsCompleted] = useState(0);
   const [showSuggestionLogs, setShowSuggestionLogs] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
+  const [copyFromProjectOpen, setCopyFromProjectOpen] = useState(false);
+  const [copyFromProjectItemId, setCopyFromProjectItemId] = useState<string | null>(null);
+  const [copyFromProjectBlockCode, setCopyFromProjectBlockCode] = useState("");
+  const [copyFromProjectText, setCopyFromProjectText] = useState("");
+  const [copyFromProjectBlocks, setCopyFromProjectBlocks] = useState<SearchBlocksBlock[]>([]);
+  const [copyFromProjectTotal, setCopyFromProjectTotal] = useState(0);
+  const [copyFromProjectPage, setCopyFromProjectPage] = useState(1);
+  const COPY_FROM_PROJECT_PAGE_SIZE = 5;
+  const [copyFromProjectSelected, setCopyFromProjectSelected] = useState<SearchBlocksBlock | null>(null);
+  const [copyFromProjectLoading, setCopyFromProjectLoading] = useState(false);
   const subItemsByItemIdRef = useRef<Record<string, PricingSubItem[]>>({});
   const lastSavedSnapshotRef = useRef<string>("");
   const initializingRef = useRef(false);
@@ -277,6 +324,7 @@ export default function Pricing({
       qtyOverrideByItemId,
       collapsedByItemId,
       completedByItemId,
+      blockCodeByItemId,
     }),
     [
       percentage,
@@ -292,6 +340,7 @@ export default function Pricing({
       qtyOverrideByItemId,
       collapsedByItemId,
       completedByItemId,
+      blockCodeByItemId,
     ]
   );
 
@@ -313,6 +362,7 @@ export default function Pricing({
     setQtyOverrideByItemId((payload.qtyOverrideByItemId as Record<string, string>) ?? {});
     setCollapsedByItemId((payload.collapsedByItemId as Record<string, boolean>) ?? {});
     setCompletedByItemId((payload.completedByItemId as Record<string, boolean>) ?? {});
+    setBlockCodeByItemId((payload.blockCodeByItemId as Record<string, string>) ?? {});
   }, []);
 
   useEffect(() => {
@@ -359,6 +409,16 @@ export default function Pricing({
     subItemsByItemIdRef.current = subItemsByItemId;
   }, [subItemsByItemId]);
 
+  useEffect(() => {
+    if (copyFromProjectOpen) {
+      const originalOverflow = document.body.style.overflow;
+      document.body.style.overflow = "hidden";
+      return () => {
+        document.body.style.overflow = originalOverflow;
+      };
+    }
+  }, [copyFromProjectOpen]);
+
   const sortedBoqItems = useMemo(() => {
     return [...boqItems].sort((a, b) => {
       const aSheet = a.metadata?.sheetIndex ?? 0;
@@ -403,6 +463,7 @@ export default function Pricing({
     () =>
       productivityBlocks.map((block) => ({
         id: block.id,
+        code: String(block.code ?? "").trim(),
         description: block.description || "Untitled",
         unit: block.unit,
         unitMh: computeManpowerMh(block),
@@ -421,6 +482,15 @@ export default function Pricing({
 
   const productivityOptionsById = useMemo(() => {
     return new Map(productivityOptions.map((option) => [option.id, option]));
+  }, [productivityOptions]);
+
+  const productivityOptionsByCode = useMemo(() => {
+    const map = new Map<string, ProductivityOption>();
+    productivityOptions.forEach((option) => {
+      const key = normalizeCode(option.code);
+      if (key) map.set(key, option);
+    });
+    return map;
   }, [productivityOptions]);
 
   useEffect(() => {
@@ -443,6 +513,7 @@ export default function Pricing({
           changed = true;
           return {
             ...row,
+            unit: match.unit,
             unitMh: match.unitMh,
             unitWagesRate: match.unitWagesRate,
             unitEquipRate: match.equipmentRate,
@@ -502,6 +573,49 @@ export default function Pricing({
       const list = map.get(key) ?? [];
       list.push(item);
       map.set(key, list);
+    });
+    return map;
+  }, [drawingItems]);
+
+  // CAD details are usually saved as ITEM rows under the previous non-ITEM code.
+  // Build a lookup to recover detail notes per main code for pricing sub-rows.
+  const drawingDetailNotesByMainCode = useMemo(() => {
+    const map = new Map<string, Array<{ productivityRateId?: string; note: string }>>();
+    let currentMainCode = "";
+    drawingItems.forEach((item) => {
+      const code = String(item.item_code ?? "").trim();
+      if (!code) return;
+      const productivityRateId = String(item.productivityRateId ?? "").trim();
+      const note = String(item.notes ?? "").trim();
+      if (code.toUpperCase() !== "ITEM") {
+        currentMainCode = code.toLowerCase();
+        if (!map.has(currentMainCode)) map.set(currentMainCode, []);
+        // Some CAD rows may carry direct productivity links on non-ITEM codes.
+        if (productivityRateId) {
+          const list = map.get(currentMainCode) ?? [];
+          list.push({ productivityRateId, note });
+          map.set(currentMainCode, list);
+        }
+        return;
+      }
+      if (!currentMainCode) return;
+      const list = map.get(currentMainCode) ?? [];
+      list.push({ ...(productivityRateId ? { productivityRateId } : {}), note });
+      map.set(currentMainCode, list);
+    });
+    return map;
+  }, [drawingItems]);
+
+  const drawingNotesByProductivityId = useMemo(() => {
+    const map = new Map<string, string[]>();
+    drawingItems.forEach((item) => {
+      const productivityRateId = String(item.productivityRateId ?? "").trim();
+      if (!productivityRateId) return;
+      const note = String(item.notes ?? "").trim();
+      if (!note) return;
+      const list = map.get(productivityRateId) ?? [];
+      list.push(note);
+      map.set(productivityRateId, list);
     });
     return map;
   }, [drawingItems]);
@@ -582,6 +696,7 @@ export default function Pricing({
         {
           id: uuidv4(),
           description: "",
+          note: "",
           qty: defaultQty,
           unitMh: 0,
           unitEquipRate: 0,
@@ -615,11 +730,18 @@ export default function Pricing({
       const selected = productivityOptions.find((option) => option.id === optionId);
       if (!selected) return;
       const defaultQty = defaultQtyByItemId.get(itemId) ?? "1";
+      setRowCodeErrorByRowId((prev) => {
+        const next = { ...prev };
+        delete next[rowId];
+        return next;
+      });
       updateSubItem(itemId, rowId, (row) => ({
         ...row,
+        code: selected.code,
         productivityId: selected.id,
         description: selected.description,
         qty: row.qty && row.qty.trim() ? row.qty : defaultQty,
+        unit: selected.unit,
         unitMh: selected.unitMh,
         unitWagesRate: selected.unitWagesRate,
         unitEquipRate: selected.equipmentRate,
@@ -631,6 +753,239 @@ export default function Pricing({
       }));
     },
     [defaultQtyByItemId, productivityOptions, updateSubItem]
+  );
+
+  const handleBlockCodeChange = useCallback(
+    (itemId: string, newCode: string) => {
+      setBlockCodeLoadingByItemId((prev) => ({ ...prev, [itemId]: true }));
+      const trimmed = String(newCode ?? "").trim();
+      setBlockCodeByItemId((current) => ({ ...current, [itemId]: trimmed }));
+      const run = () => {
+        if (!trimmed) {
+          setBlockCodeLoadingByItemId((prev) => ({ ...prev, [itemId]: false }));
+          return;
+        }
+        const normalizedNew = normalizeCode(trimmed);
+        const sourceEntry = pricingBlocks.find(
+          (entry) => entry.item.id !== itemId && normalizeCode(blockCodeByItemId[entry.item.id] ?? "") === normalizedNew
+        );
+        if (!sourceEntry) {
+          setBlockCodeLoadingByItemId((prev) => ({ ...prev, [itemId]: false }));
+          return;
+        }
+        const sourceRows = subItemsByItemId[sourceEntry.item.id] ?? [];
+        if (sourceRows.length === 0) {
+          setBlockCodeLoadingByItemId((prev) => ({ ...prev, [itemId]: false }));
+          return;
+        }
+        const defaultQty = defaultQtyByItemId.get(itemId) ?? "1";
+        const defaultQtyValue = parseNumber(defaultQty);
+        const existing = subItemsByItemId[itemId] ?? [];
+        const newRows: PricingSubItem[] = sourceRows.map((row) => {
+          const thickness = row.thickness != null ? row.thickness : undefined;
+          const qty =
+            thickness != null && Number.isFinite(thickness)
+              ? String(defaultQtyValue * thickness * 0.001)
+              : defaultQty;
+          const option = row.productivityId ? productivityOptionsById.get(row.productivityId) : null;
+          if (!option) {
+            return {
+              id: uuidv4(),
+              code: row.code,
+              description: row.description,
+              note: row.note,
+              thickness: row.thickness ?? undefined,
+              productivityId: row.productivityId,
+              suggestedIds: row.suggestedIds,
+              qty,
+              unit: row.unit,
+              unitMh: row.unitMh,
+              unitWagesRate: row.unitWagesRate,
+              unitEquipRate: row.unitEquipRate,
+              materialsRate: row.materialsRate ?? "0.00",
+              subconRate: row.subconRate ?? "0.00",
+              toolsRate: row.toolsRate ?? "0.00",
+            };
+          }
+          return {
+            id: uuidv4(),
+            code: option.code,
+            description: option.description,
+            note: row.note,
+            thickness: row.thickness ?? undefined,
+            productivityId: option.id,
+            suggestedIds: [option.id],
+            qty,
+            unit: option.unit,
+            unitMh: option.unitMh,
+            unitWagesRate: option.unitWagesRate,
+            unitEquipRate: option.equipmentRate,
+            materialsRate: "0.00",
+            subconRate: "0.00",
+            toolsRate: "0.00",
+          };
+        });
+        setSubItemsByItemId((current) => ({
+          ...current,
+          [itemId]: [...existing, ...newRows],
+        }));
+        onDirtyChange?.(true);
+        setIsDirty(true);
+        setTimeout(() => setBlockCodeLoadingByItemId((prev) => ({ ...prev, [itemId]: false })), 220);
+      };
+      setTimeout(run, 0);
+    },
+    [
+      pricingBlocks,
+      blockCodeByItemId,
+      subItemsByItemId,
+      defaultQtyByItemId,
+      productivityOptionsById,
+      onDirtyChange,
+    ]
+  );
+
+  const openCopyFromProjectModal = useCallback((itemId: string) => {
+    setCopyFromProjectItemId(itemId);
+    setCopyFromProjectOpen(true);
+    setCopyFromProjectBlockCode("");
+    setCopyFromProjectText("");
+    setCopyFromProjectBlocks([]);
+    setCopyFromProjectTotal(0);
+    setCopyFromProjectPage(1);
+    setCopyFromProjectSelected(null);
+  }, []);
+
+  const fetchCopyFromProjectPage = useCallback(
+    async (page: number) => {
+      if (!projectId) return;
+      const blockCode = copyFromProjectBlockCode.trim() || undefined;
+      const text = copyFromProjectText.trim() || undefined;
+      if (!blockCode && !text) {
+        setCopyFromProjectBlocks([]);
+        setCopyFromProjectTotal(0);
+        return;
+      }
+      setCopyFromProjectLoading(true);
+      try {
+        const { blocks, total } = await searchPricingBlocks(projectId, {
+          blockCode,
+          text,
+          page,
+          pageSize: COPY_FROM_PROJECT_PAGE_SIZE,
+        });
+        setCopyFromProjectBlocks(blocks);
+        setCopyFromProjectTotal(total);
+        setCopyFromProjectPage(page);
+        setCopyFromProjectSelected(null);
+      } finally {
+        setCopyFromProjectLoading(false);
+      }
+    },
+    [projectId, copyFromProjectBlockCode, copyFromProjectText]
+  );
+
+  const filterCopyFromProject = useCallback(() => {
+    fetchCopyFromProjectPage(1);
+  }, [fetchCopyFromProjectPage]);
+
+  const goToCopyFromProjectPage = useCallback(
+    (page: number) => {
+      if (page < 1 || page > Math.ceil(copyFromProjectTotal / COPY_FROM_PROJECT_PAGE_SIZE)) return;
+      fetchCopyFromProjectPage(page);
+    },
+    [copyFromProjectTotal, fetchCopyFromProjectPage]
+  );
+
+  const applyCopyFromProject = useCallback(() => {
+    const itemId = copyFromProjectItemId;
+    const selected = copyFromProjectSelected;
+    if (!itemId || !selected || selected.subitems.length === 0) return;
+    const currentBlockQty = defaultQtyByItemId.get(itemId) ?? "1";
+    const currentBlockQtyValue = parseNumber(currentBlockQty);
+    const newRows: PricingSubItem[] = selected.subitems.map((sub: SearchBlocksSubitem) => {
+      const code = String(sub.code ?? "").trim();
+      const option = code ? productivityOptionsByCode.get(normalizeCode(code)) : null;
+      const thickness = sub.thickness != null && Number.isFinite(sub.thickness) ? sub.thickness : null;
+      const qty =
+        thickness != null && Number.isFinite(thickness)
+          ? String(currentBlockQtyValue * thickness * 0.001)
+          : currentBlockQty;
+      if (option) {
+        return {
+          id: uuidv4(),
+          code: option.code,
+          description: option.description,
+          note: "",
+          productivityId: option.id,
+          suggestedIds: [option.id],
+          qty,
+          thickness: thickness ?? undefined,
+          unit: option.unit,
+          unitMh: option.unitMh,
+          unitWagesRate: option.unitWagesRate,
+          unitEquipRate: option.equipmentRate,
+          materialsRate: "0.00",
+          subconRate: "0.00",
+          toolsRate: "0.00",
+        };
+      }
+      return {
+        id: uuidv4(),
+        code: code || undefined,
+        description: String(sub.description ?? "").trim() || "—",
+        note: "",
+        qty,
+        thickness: thickness ?? undefined,
+        unitMh: 0,
+        unitWagesRate: 0,
+        unitEquipRate: 0,
+        materialsRate: "0.00",
+        subconRate: "0.00",
+        toolsRate: "0.00",
+      };
+    });
+    setSubItemsByItemId((current) => ({
+      ...current,
+      [itemId]: newRows,
+    }));
+    onDirtyChange?.(true);
+    setIsDirty(true);
+    setCopyFromProjectOpen(false);
+    setCopyFromProjectItemId(null);
+    setCopyFromProjectSelected(null);
+  }, [
+    copyFromProjectItemId,
+    copyFromProjectSelected,
+    defaultQtyByItemId,
+    productivityOptionsByCode,
+    onDirtyChange,
+  ]);
+
+  const handleSubItemCodeChange = useCallback(
+    (itemId: string, rowId: string, codeValue: string) => {
+      setCodeLoadingByRowId((prev) => ({ ...prev, [rowId]: true }));
+      setRowCodeErrorByRowId((prev) => {
+        const next = { ...prev };
+        delete next[rowId];
+        return next;
+      });
+      const trimmed = String(codeValue ?? "").trim();
+      updateSubItem(itemId, rowId, (row) => ({ ...row, code: trimmed }));
+      const clearLoading = () => setTimeout(() => setCodeLoadingByRowId((prev) => ({ ...prev, [rowId]: false })), 220);
+      if (!trimmed) {
+        clearLoading();
+        return;
+      }
+      const option = productivityOptionsByCode.get(normalizeCode(trimmed));
+      if (option) {
+        handleSelectProductivity(itemId, rowId, option.id);
+      } else {
+        setRowCodeErrorByRowId((prev) => ({ ...prev, [rowId]: "No productivity rate item with this code." }));
+      }
+      clearLoading();
+    },
+    [productivityOptionsByCode, updateSubItem, handleSelectProductivity]
   );
 
   const updateAutoQty = useCallback((itemId: string, value: string) => {
@@ -714,7 +1069,6 @@ export default function Pricing({
               const option = productivityOptionsById.get(detailProductivityId);
               if (!option) return null;
               scheduleEligibleDetailCount += 1;
-              const detailDescription = String(detail.description ?? "").trim();
               const thickValue = parseThickness(detail.thickness);
               const computedQty =
                 thickValue !== null && baseQtyValue !== null
@@ -722,10 +1076,14 @@ export default function Pricing({
                   : qty;
               return {
                 id: uuidv4(),
-                description: detailDescription || option.description,
+                code: option.code,
+                description: option.description,
+                note: String(detail.notes ?? "").trim(),
+                thickness: thickValue ?? undefined,
                 productivityId: option.id,
                 suggestedIds: [option.id],
                 qty: computedQty,
+                unit: option.unit,
                 unitMh: option.unitMh,
                 unitWagesRate: option.unitWagesRate,
                 unitEquipRate: option.equipmentRate,
@@ -792,6 +1150,12 @@ export default function Pricing({
         scheduleCodes: [],
       };
     });
+    const cadDetailsByBlockId = new Map(
+      aiBlocks.map((entry) => {
+        const mainCode = String(entry.item.item_code ?? "").trim().toLowerCase();
+        return [entry.item.id, mainCode ? drawingDetailNotesByMainCode.get(mainCode) ?? [] : []] as const;
+      })
+    );
     const defaultQtyByBlockId = new Map(
       suggestionBlocks.map((block) => [block.blockId, block.qty || "1"])
     );
@@ -838,6 +1202,44 @@ export default function Pricing({
               const existing = next[itemId] ?? [];
               const existingIds = new Set(existing.map((row) => row.productivityId).filter(Boolean));
               const defaultQty = defaultQtyByBlockId.get(itemId) ?? "1";
+              const cadDetails = cadDetailsByBlockId.get(itemId) ?? [];
+              const usedCadIndexes = new Set<number>();
+              const usedGlobalNotesByProductivity = new Map<string, number>();
+              const takeCadNoteForProductivity = (productivityId: string): string => {
+                if (!productivityId) return "";
+                const matchWithNoteIdx = cadDetails.findIndex(
+                  (detail, idx) =>
+                    !usedCadIndexes.has(idx) &&
+                    detail.productivityRateId === productivityId &&
+                    Boolean(detail.note)
+                );
+                if (matchWithNoteIdx >= 0) {
+                  usedCadIndexes.add(matchWithNoteIdx);
+                  return cadDetails[matchWithNoteIdx].note;
+                }
+                const firstMatchIdx = cadDetails.findIndex(
+                  (detail, idx) => !usedCadIndexes.has(idx) && detail.productivityRateId === productivityId
+                );
+                if (firstMatchIdx >= 0) {
+                  usedCadIndexes.add(firstMatchIdx);
+                  return cadDetails[firstMatchIdx].note;
+                }
+                const fallbackAnyNoteIdx = cadDetails.findIndex(
+                  (detail, idx) => !usedCadIndexes.has(idx) && Boolean(detail.note)
+                );
+                if (fallbackAnyNoteIdx >= 0) {
+                  usedCadIndexes.add(fallbackAnyNoteIdx);
+                  return cadDetails[fallbackAnyNoteIdx].note;
+                }
+                const globalNotes = drawingNotesByProductivityId.get(productivityId) ?? [];
+                if (globalNotes.length > 0) {
+                  const usedCount = usedGlobalNotesByProductivity.get(productivityId) ?? 0;
+                  const pickedIndex = Math.min(usedCount, globalNotes.length - 1);
+                  usedGlobalNotesByProductivity.set(productivityId, usedCount + 1);
+                  return globalNotes[pickedIndex] ?? "";
+                }
+                return "";
+              };
               const newRows = (result.items ?? [])
                 .map((item) => {
                   const suggestions = (item.suggestedIds ?? []).filter((id: string) =>
@@ -845,21 +1247,37 @@ export default function Pricing({
                   );
                   if (suggestions.length === 0) return null;
                   const [primaryId] = suggestions;
-                  if (!primaryId || existingIds.has(primaryId)) return null;
+                  if (!primaryId) return null;
+                  if (existingIds.has(primaryId)) {
+                    const existingNote = takeCadNoteForProductivity(primaryId);
+                    if (existingNote) {
+                      next[itemId] = (next[itemId] ?? []).map((row) => {
+                        if (row.productivityId !== primaryId) return row;
+                        if ((row.note ?? "").trim()) return row;
+                        return { ...row, note: existingNote };
+                      });
+                    }
+                    return null;
+                  }
                   const option = productivityOptionsById.get(primaryId);
                   if (!option) return null;
                   const thickValue = parseThickness(item.thick);
                   const baseQtyValue = parseStrictNumber(defaultQty);
+                  const thicknessMm = thickValue !== null ? Math.round(thickValue * 1000) : null;
                   const computedQty =
-                    thickValue !== null && baseQtyValue !== null
-                      ? String(baseQtyValue * thickValue)
+                    thicknessMm !== null && baseQtyValue !== null
+                      ? String(baseQtyValue * thicknessMm * 0.001)
                       : defaultQty;
                   return {
                     id: uuidv4(),
+                    code: option.code,
                     description: option.description,
+                    note: takeCadNoteForProductivity(option.id),
+                    thickness: thicknessMm ?? undefined,
                     productivityId: option.id,
                     suggestedIds: suggestions,
                     qty: computedQty,
+                    unit: option.unit,
                     unitMh: option.unitMh,
                     unitWagesRate: option.unitWagesRate,
                     unitEquipRate: option.equipmentRate,
@@ -923,6 +1341,8 @@ export default function Pricing({
     productivityOptionsById,
     qtyOverrideByItemId,
     drawingItemsByCode,
+    drawingDetailNotesByMainCode,
+    drawingNotesByProductivityId,
     findScheduleMatches,
     onDirtyChange,
     pushSuggestionLog,
@@ -968,7 +1388,7 @@ export default function Pricing({
       const subItems = subItemsByItemId[item.id] ?? [];
 
       const manualRows = subItems.map((row) => {
-        const rowQtyValue = parseNumber(row.qty ?? qtyDisplay);
+        const rowQtyValue = getSubRowEffectiveQty(row, qtyDisplay);
         const unitMh = parseNumber(row.unitMh);
         const totalMh = unitMh * rowQtyValue;
         const unitRateWages =
@@ -1098,7 +1518,7 @@ export default function Pricing({
 
         const manualTotals = subItems.reduce(
           (manualAcc, row) => {
-            const rowQtyValue = parseNumber(row.qty ?? qtyDisplay);
+            const rowQtyValue = getSubRowEffectiveQty(row, qtyDisplay);
             const unitMh = parseNumber(row.unitMh);
             const totalMh = unitMh * rowQtyValue;
             const unitRateWages =
@@ -1325,8 +1745,10 @@ export default function Pricing({
 
   const getHeaderClassName = (idx: number, header: PricingHeader) => {
     const classes = [];
-    if (idx === 0) classes.push("pricing-col-code");
-    if (idx === 1) classes.push("pricing-col-description");
+    if (idx === 0) classes.push("pricing-col-action");
+    if (idx === 1) classes.push("pricing-col-code");
+    if (idx === 2) classes.push("pricing-col-description");
+    if (idx === 3) classes.push("pricing-col-note");
     if (header.group === "sell") classes.push("pricing-col-sell");
     return classes.length ? classes.join(" ") : undefined;
   };
@@ -1542,7 +1964,7 @@ export default function Pricing({
               const subItems = subItemsByItemId[item.id] ?? [];
 
               const manualRows = subItems.map((row) => {
-                const rowQtyValue = parseNumber(row.qty ?? qtyDisplay);
+                const rowQtyValue = getSubRowEffectiveQty(row, qtyDisplay);
                 const unitMh = parseNumber(row.unitMh);
                 const totalMh = unitMh * rowQtyValue;
                 const unitRateWages =
@@ -1683,6 +2105,33 @@ export default function Pricing({
                     }}
                   >
                     <span>{categoryLabel}</span>
+                    <div className="pricing-accordion__block-code" onClick={(e) => e.stopPropagation()}>
+                      <label className="pricing-block-code-label">
+                        Block code
+                        {blockCodeLoadingByItemId[item.id] && (
+                          <span className="pricing-code-loader pricing-code-loader--inline" aria-hidden>
+                            <span className="pricing-code-loader__spinner" />
+                          </span>
+                        )}
+                        <input
+                          type="text"
+                          className="pricing-block-code-input"
+                          value={blockCodeByItemId[item.id] ?? ""}
+                          disabled={!!blockCodeLoadingByItemId[item.id]}
+                          onChange={(e) => setBlockCodeByItemId((curr) => ({ ...curr, [item.id]: e.target.value }))}
+                          onBlur={(e) => handleBlockCodeChange(item.id, e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.stopPropagation();
+                              (e.target as HTMLInputElement).blur();
+                            }
+                            if (e.key === " ") e.stopPropagation();
+                          }}
+                          placeholder="Code"
+                          aria-label="Block code"
+                        />
+                      </label>
+                    </div>
                     <div className="pricing-accordion__actions">
                       <button
                         type="button"
@@ -1696,6 +2145,18 @@ export default function Pricing({
                         title={isCompleted ? "Mark block as in progress" : "Mark block as completed"}
                       >
                         ✓
+                      </button>
+                      <button
+                        type="button"
+                        className="inline-copy-block-button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          openCopyFromProjectModal(item.id);
+                        }}
+                        aria-label="Copy from another project"
+                        title="Copy from another project"
+                      >
+                        ⎘
                       </button>
                       <button
                         type="button"
@@ -1716,9 +2177,11 @@ export default function Pricing({
                       <div className="pricing-table-wrapper">
                         <table className="matches-table pricing-table">
                           <colgroup>
-                            <col style={{ width: "30px" }} />
+                            <col style={{ width: "36px" }} />
+                            <col style={{ width: "100px" }} />
                             <col style={{ width: "300px" }} />
-                            {PRICING_HEADERS.slice(2).map((_, idx) => (
+                            <col style={{ width: "220px" }} />
+                            {PRICING_HEADERS.slice(4).map((_, idx) => (
                               <col key={`col-${item.id}-${idx}`} style={{ width: "180px" }} />
                             ))}
                           </colgroup>
@@ -1765,10 +2228,13 @@ export default function Pricing({
                               </tr>
                             ))}
                             <tr>
+                              <td className="pricing-col-action" />
                               <td className="pricing-col-code">{item.item_code || "—"}</td>
                               <td className="pricing-col-description">
                                 <span className="cell-text">{item.description}</span>
                               </td>
+                              <td className="pricing-col-note" />
+                              <td />
                               <td>{qtyDisplay || "—"}</td>
                               <td>{unitDisplay || "—"}</td>
                               <td>{formatRounded(pricedUnitMh)}</td>
@@ -1813,9 +2279,11 @@ export default function Pricing({
                                     .filter((option) => option.description.toLowerCase().includes(query))
                                     .slice(0, 8)
                                 : [];
+                              const displayCode = row.code ?? (row.productivityId ? productivityOptionsById.get(row.productivityId)?.code ?? "" : "");
+                              const isCodeLoading = codeLoadingByRowId[row.id];
                               return (
                                 <tr key={row.id}>
-                                  <td className="pricing-col-code">
+                                  <td className="pricing-col-action">
                                     <button
                                       type="button"
                                       className="inline-remove-button"
@@ -1825,6 +2293,38 @@ export default function Pricing({
                                       −
                                     </button>
                                   </td>
+                                  <td className="pricing-col-code">
+                                    <div className="pricing-sub-row-code-cell">
+                                      <span className="pricing-sub-row-code-input-wrap">
+                                        <input
+                                          type="text"
+                                          className="pricing-sub-item-code-input"
+                                          value={displayCode}
+                                          disabled={isCodeLoading}
+                                        onChange={(e) => updateSubItem(item.id, row.id, (r) => ({ ...r, code: e.target.value }))}
+                                        onBlur={(e) => handleSubItemCodeChange(item.id, row.id, e.target.value)}
+                                        onKeyDown={(e) => {
+                                          if (e.key === "Enter") {
+                                            (e.target as HTMLInputElement).blur();
+                                          }
+                                        }}
+                                        placeholder="Code"
+                                        aria-label="Sub item code (productivity rate)"
+                                        title="Type a productivity rate code to auto-fill"
+                                      />
+                                        {isCodeLoading && (
+                                          <span className="pricing-code-loader pricing-code-loader--inline" aria-hidden>
+                                            <span className="pricing-code-loader__spinner" />
+                                          </span>
+                                        )}
+                                      </span>
+                                      {rowCodeErrorByRowId[row.id] && (
+                                        <span className="pricing-row-code-error" role="alert">
+                                          {rowCodeErrorByRowId[row.id]}
+                                        </span>
+                                      )}
+                                    </div>
+                                  </td>
                                   <td className="pricing-col-description" style={{ position: "relative", overflow: "visible" }}>
                                     <div className="productivity-cell-with-action" ref={(el) => {
                                       menuAnchorRefs.current[row.id] = el;
@@ -1832,6 +2332,7 @@ export default function Pricing({
                                       <input
                                         type="text"
                                         value={row.description}
+                                        title={row.description}
                                         onFocus={() => {
                                           if (row.suggestedIds?.length) {
                                             setActiveRowId(row.id);
@@ -1877,6 +2378,7 @@ export default function Pricing({
                                                   key={option.id}
                                                   type="button"
                                                   className={`pricing-match-menu__item${option.id === row.productivityId ? " is-active" : ""}`}
+                                                  title={option.description}
                                                   onMouseDown={(event) => {
                                                     event.preventDefault();
                                                     handleSelectProductivity(item.id, row.id, option.id);
@@ -1906,6 +2408,7 @@ export default function Pricing({
                                                   key={option.id}
                                                   type="button"
                                                   className={`pricing-match-menu__item${option.id === row.productivityId ? " is-active" : ""}`}
+                                                  title={option.description}
                                                   onMouseDown={(event) => {
                                                     event.preventDefault();
                                                     handleSelectProductivity(item.id, row.id, option.id);
@@ -1920,20 +2423,64 @@ export default function Pricing({
                                       )}
                                     </div>
                                   </td>
+                                  <td className="pricing-col-note">
+                                    <input
+                                      type="text"
+                                      value={row.note ?? ""}
+                                      onChange={(event) =>
+                                        updateSubItem(item.id, row.id, (current) => ({
+                                          ...current,
+                                          note: event.target.value,
+                                        }))
+                                      }
+                                      placeholder="Note"
+                                      title={row.note ?? ""}
+                                    />
+                                  </td>
                                   <td>
                                     <input
                                       type="text"
                                       inputMode="decimal"
-                                      value={row.qty ?? qtyDisplay}
+                                      placeholder="mm"
+                                      value={row.thickness != null ? String(row.thickness) : ""}
+                                      onChange={(event) => {
+                                        const raw = event.target.value.trim();
+                                        if (raw === "") {
+                                          updateSubItem(item.id, row.id, (current) => ({
+                                            ...current,
+                                            thickness: null,
+                                          }));
+                                          return;
+                                        }
+                                        const num = parseStrictNumber(raw);
+                                        if (num === null) return;
+                                        const mainQty = parseNumber(qtyDisplay);
+                                        updateSubItem(item.id, row.id, (current) => ({
+                                          ...current,
+                                          thickness: num,
+                                          qty: String(mainQty * num * 0.001),
+                                        }));
+                                      }
+                                    }
+                                  aria-label="Thickness (mm)"
+                                  title="Thickness in mm; qty = main qty × thickness × 0.001"
+                                />
+                                  </td>
+                                  <td>
+                                    <input
+                                      type="text"
+                                      inputMode="decimal"
+                                      value={row.thickness != null ? String(getSubRowEffectiveQty(row, qtyDisplay)) : (row.qty ?? qtyDisplay)}
                                       onChange={(event) =>
                                         updateSubItem(item.id, row.id, (current) => ({
                                           ...current,
                                           qty: event.target.value,
+                                          thickness: undefined,
                                         }))
                                       }
                                     />
                                   </td>
-                                  <td>{unitDisplay || "—"}</td>
+                                  <td>{row.unit ?? unitDisplay ?? "—"}</td>
                                   <td>{formatRounded(row.unitMh)}</td>
                                   <td>{formatRounded(row.totalMh)}</td>
                                   <td>{formatRounded(row.unitRateWages)}</td>
@@ -1997,10 +2544,13 @@ export default function Pricing({
                               );
                             })}
                             <tr>
+                              <td className="pricing-col-action" />
                               <td className="pricing-col-code" />
                               <td className="pricing-col-description">
                                 <span className="cell-text">{`${percentageLabel}% - ${idleText}`}</span>
                               </td>
+                              <td className="pricing-col-note" />
+                              <td />
                               <td>
                                 <input
                                   type="number"
@@ -2141,6 +2691,163 @@ export default function Pricing({
           </div>
         )}
       </div>
+      <button
+        type="button"
+        className="pricing-fab btn-secondary"
+        onClick={handleSave}
+        disabled={saving || !projectId || !isDirty}
+        title="Save pricing"
+      >
+        {saving ? "Saving..." : "Save"}
+      </button>
+      {copyFromProjectOpen && (
+        <div
+          className="pricing-copy-modal-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="copy-from-project-title"
+          onClick={(e) => e.target === e.currentTarget && setCopyFromProjectOpen(false)}
+        >
+          <div className="pricing-copy-modal">
+            <h2 id="copy-from-project-title" className="pricing-copy-modal__title">
+              Copy from another project
+            </h2>
+            <div className="pricing-copy-modal__filters">
+              <label className="pricing-copy-modal__label">
+                Search by block code
+                <input
+                  type="text"
+                  className="pricing-copy-modal__input"
+                  value={copyFromProjectBlockCode}
+                  onChange={(e) => setCopyFromProjectBlockCode(e.target.value)}
+                  placeholder="Block code"
+                  onKeyDown={(e) => e.key === "Enter" && filterCopyFromProject()}
+                />
+              </label>
+              <label className="pricing-copy-modal__label">
+                Search by text
+                <input
+                  type="text"
+                  className="pricing-copy-modal__input"
+                  value={copyFromProjectText}
+                  onChange={(e) => setCopyFromProjectText(e.target.value)}
+                  placeholder="Description or text"
+                  onKeyDown={(e) => e.key === "Enter" && filterCopyFromProject()}
+                />
+              </label>
+              <button
+                type="button"
+                className="pricing-copy-modal__filter-btn btn-secondary"
+                onClick={filterCopyFromProject}
+                disabled={copyFromProjectLoading}
+              >
+                {copyFromProjectLoading ? "Searching…" : "Filter"}
+              </button>
+            </div>
+            <div className="pricing-copy-modal__table-wrap">
+              {copyFromProjectLoading ? (
+                <div className="pricing-copy-modal__loader" aria-busy="true">
+                  <span className="pricing-code-loader__spinner" />
+                  <span className="pricing-copy-modal__loader-text">Searching…</span>
+                </div>
+              ) : copyFromProjectBlocks.length === 0 && copyFromProjectTotal === 0 ? (
+                <p className="pricing-copy-modal__empty">
+                  Enter block code or text and click Filter to find blocks from other projects.
+                </p>
+              ) : copyFromProjectBlocks.length === 0 ? (
+                <p className="pricing-copy-modal__empty">No blocks found.</p>
+              ) : (
+                <>
+                  <table className="pricing-copy-modal__table matches-table">
+                    <thead>
+                      <tr>
+                        <th>Project</th>
+                        <th>Description</th>
+                        <th>Subitems</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {copyFromProjectBlocks.map((block) => (
+                        <tr
+                          key={`${block.projectId}-${block.itemId}`}
+                          className={copyFromProjectSelected === block ? "pricing-copy-modal__row--selected" : ""}
+                          onClick={() => setCopyFromProjectSelected(block)}
+                          role="button"
+                          tabIndex={0}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              setCopyFromProjectSelected(block);
+                            }
+                          }}
+                        >
+                          <td>{block.projectName}</td>
+                          <td>{block.description}</td>
+                          <td>
+                            <ul className="pricing-copy-modal__subitems">
+                              {block.subitems.map((sub, i) => (
+                                <li key={i}>
+                                  {sub.code} — {sub.description}
+                                </li>
+                              ))}
+                            </ul>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {copyFromProjectTotal > COPY_FROM_PROJECT_PAGE_SIZE && (
+                    <div className="pricing-copy-modal__pagination">
+                      <span className="pricing-copy-modal__pagination-info">
+                        Page {copyFromProjectPage} of{" "}
+                        {Math.ceil(copyFromProjectTotal / COPY_FROM_PROJECT_PAGE_SIZE)} ({copyFromProjectTotal}{" "}
+                        results)
+                      </span>
+                      <div className="pricing-copy-modal__pagination-btns">
+                        <button
+                          type="button"
+                          className="btn-secondary pricing-copy-modal__page-btn"
+                          disabled={copyFromProjectPage <= 1}
+                          onClick={() => goToCopyFromProjectPage(copyFromProjectPage - 1)}
+                        >
+                          Previous
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-secondary pricing-copy-modal__page-btn"
+                          disabled={
+                            copyFromProjectPage >= Math.ceil(copyFromProjectTotal / COPY_FROM_PROJECT_PAGE_SIZE)
+                          }
+                          onClick={() => goToCopyFromProjectPage(copyFromProjectPage + 1)}
+                        >
+                          Next
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+            <div className="pricing-copy-modal__actions">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setCopyFromProjectOpen(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={applyCopyFromProject}
+                disabled={!copyFromProjectSelected || (copyFromProjectSelected?.subitems?.length ?? 0) === 0}
+              >
+                Add
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

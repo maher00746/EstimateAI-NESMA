@@ -926,7 +926,7 @@ router.post(
         return res.status(404).json({ message: "File not found" });
       }
       const { item_code, description, notes, box, thickness, productivityRateId } = req.body ?? {};
-      if (!item_code || !description || !notes) {
+      if (!item_code || !description || notes === undefined) {
         return res.status(400).json({ message: "item_code, description, and notes are required" });
       }
       const item = await createProjectItem({
@@ -936,7 +936,7 @@ router.post(
         source: "manual",
         item_code,
         description,
-        notes,
+        notes: String(notes ?? ""),
         box: box ?? null,
         thickness: typeof thickness === "number" ? thickness : null,
         productivityRateId: productivityRateId ?? null,
@@ -974,7 +974,7 @@ router.patch(
         updates: {
           ...(item_code ? { item_code } : {}),
           ...(description ? { description } : {}),
-          ...(notes ? { notes } : {}),
+          ...(notes !== undefined ? { notes: String(notes ?? "") } : {}),
           ...(box ? { box } : {}),
           ...(thickness !== undefined ? { thickness: typeof thickness === "number" ? thickness : null } : {}),
           ...(productivityRateId !== undefined ? { productivityRateId: productivityRateId || null } : {}),

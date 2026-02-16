@@ -227,6 +227,7 @@ export interface ProductivityRatesRow {
 
 export interface ProductivityRatesBlock {
   id: string;
+  code: string;
   description: string;
   unit: string;
   hoursPerDay: string;
@@ -257,6 +258,8 @@ export interface PricingPayload {
   qtyOverrideByItemId?: Record<string, unknown>;
   collapsedByItemId?: Record<string, unknown>;
   completedByItemId?: Record<string, unknown>;
+  /** User-defined block code; when changed to match another block, sub rows are copied from that block */
+  blockCodeByItemId?: Record<string, string>;
   updatedAt?: string | null;
 }
 
