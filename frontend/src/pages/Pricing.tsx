@@ -1683,7 +1683,11 @@ export default function Pricing({
 
   useEffect(() => {
     const currentSnapshot = JSON.stringify(buildPricingPayload());
-    if (loadingPricing || initializingRef.current) return;
+    if (loadingPricing || initializingRef.current) {
+      // Clear deferred auto-update state during load/init so the first manual edit is not treated as auto-sync.
+      autoUpdateRef.current = false;
+      return;
+    }
     if (autoUpdateRef.current) {
       lastSavedSnapshotRef.current = currentSnapshot;
       onDirtyChange?.(false);
